@@ -3119,6 +3119,7 @@ async function readPackageMetadata() {
       aistudy?: {
         updateRepository?: string;
         updateAssetPattern?: string;
+        updateDownloadMirrors?: unknown;
       };
     };
     return packageJson;
@@ -3147,6 +3148,20 @@ async function getConfiguredUpdateAssetPattern() {
   return process.env.AISTUDY_UPDATE_ASSET_PATTERN?.trim()
     || packageJson.aistudy?.updateAssetPattern?.trim()
     || "";
+}
+
+async function getConfiguredUpdateDownloadMirrors() {
+  const packageJson = await readPackageMetadata();
+  const envMirrors = process.env.AISTUDY_UPDATE_DOWNLOAD_MIRRORS?.split(/[;,]/)
+    .map((mirror) => mirror.trim())
+    .filter(Boolean) ?? [];
+  const packageMirrors = Array.isArray(packageJson.aistudy?.updateDownloadMirrors)
+    ? packageJson.aistudy.updateDownloadMirrors
+      .filter((mirror): mirror is string => typeof mirror === "string")
+      .map((mirror) => mirror.trim())
+      .filter(Boolean)
+    : [];
+  return [...envMirrors, ...packageMirrors];
 }
 
 function toRepositoryWebUrl(remoteUrl: string) {
@@ -3223,6 +3238,76 @@ async function selectInstallerAsset(release: GitHubRelease) {
   );
 }
 
+function buildMirrorAssetUrl(mirrorBase: string, releaseTag: string, assetName: string) {
+  try {
+    const base = new URL(mirrorBase.endsWith("/") ? mirrorBase : `${mirrorBase}/`);
+    return new URL(`releases/${encodeURIComponent(releaseTag)}/${encodeURIComponent(assetName)}`, base).toString();
+  } catch {
+    return "";
+  }
+}
+
+async function probeUpdateDownloadUrl(url: string, expectedSize: number) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const response = await net.fetch(url, {
+      method: "HEAD",
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "AIstudy-Updater"
+      }
+    });
+    if (!response.ok) return false;
+    if (expectedSize <= 0) return true;
+    const contentLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+    return !Number.isFinite(contentLength) || contentLength === expectedSize;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveUpdateDownloadUrl(releaseTag: string, asset: GitHubReleaseAsset | null) {
+  const githubUrl = typeof asset?.browser_download_url === "string" ? asset.browser_download_url : "";
+  const assetName = typeof asset?.name === "string" ? asset.name : "";
+  const assetSize = typeof asset?.size === "number" ? asset.size : 0;
+  if (!assetName) return githubUrl;
+
+  const mirrors = await getConfiguredUpdateDownloadMirrors();
+  for (const mirror of mirrors) {
+    const mirrorUrl = buildMirrorAssetUrl(mirror, releaseTag, assetName);
+    if (mirrorUrl && await probeUpdateDownloadUrl(mirrorUrl, assetSize)) {
+      return mirrorUrl;
+    }
+  }
+
+  return githubUrl;
+}
+
+async function isConfiguredUpdateMirrorUrl(downloadUrlValue: string) {
+  let downloadUrl: URL;
+  try {
+    downloadUrl = new URL(downloadUrlValue);
+  } catch {
+    return false;
+  }
+
+  const mirrors = await getConfiguredUpdateDownloadMirrors();
+  return mirrors.some((mirror) => {
+    try {
+      const mirrorUrl = new URL(mirror.endsWith("/") ? mirror : `${mirror}/`);
+      return downloadUrl.protocol === mirrorUrl.protocol
+        && downloadUrl.hostname === mirrorUrl.hostname
+        && downloadUrl.port === mirrorUrl.port
+        && downloadUrl.pathname.startsWith("/releases/");
+    } catch {
+      return false;
+    }
+  });
+}
+
 async function fetchLatestRelease(): Promise<GitHubRelease> {
   const repositoryUrl = await getConfiguredUpdateRepositoryUrl();
   const repository = parseGitHubRepository(repositoryUrl);
@@ -3250,7 +3335,8 @@ async function fetchLatestRelease(): Promise<GitHubRelease> {
 
 async function checkForUpdates(): Promise<UpdateCheckResult> {
   const release = await fetchLatestRelease();
-  const latestVersion = normalizeVersion(typeof release.tag_name === "string" ? release.tag_name : "");
+  const releaseTag = typeof release.tag_name === "string" ? release.tag_name : "";
+  const latestVersion = normalizeVersion(releaseTag);
   if (!latestVersion) {
     throw new Error("最新版本号读取失败。");
   }
@@ -3258,7 +3344,7 @@ async function checkForUpdates(): Promise<UpdateCheckResult> {
   const asset = await selectInstallerAsset(release);
   const currentVersion = app.getVersion();
   const releaseName = typeof release.name === "string" ? release.name : `v${latestVersion}`;
-  const downloadUrl = typeof asset?.browser_download_url === "string" ? asset.browser_download_url : "";
+  const downloadUrl = await resolveUpdateDownloadUrl(releaseTag, asset);
 
   return {
     currentVersion,
@@ -3373,14 +3459,24 @@ async function fetchUpdateDownloadRange(
 }
 
 async function downloadUpdate(event: IpcMainInvokeEvent, downloadUrlValue: unknown, expectedSizeValue: unknown): Promise<UpdateDownloadResult> {
-  if (typeof downloadUrlValue !== "string" || !downloadUrlValue.startsWith("https://")) {
+  if (typeof downloadUrlValue !== "string") {
+    throw new Error("下载地址不可用。");
+  }
+  let parsedDownloadUrl: URL;
+  try {
+    parsedDownloadUrl = new URL(downloadUrlValue);
+  } catch {
+    throw new Error("下载地址不可用。");
+  }
+  const downloadProtocol = parsedDownloadUrl.protocol;
+  if (downloadProtocol !== "https:" && !(downloadProtocol === "http:" && await isConfiguredUpdateMirrorUrl(downloadUrlValue))) {
     throw new Error("下载地址不可用。");
   }
   if (activeUpdateDownloadTask && activeUpdateDownloadTask.status !== "complete" && activeUpdateDownloadTask.status !== "cancelled") {
     throw new Error("已有更新正在下载。");
   }
 
-  const url = new URL(downloadUrlValue);
+  const url = parsedDownloadUrl;
   const fileName = decodeURIComponent(path.basename(url.pathname)) || `AIstudy-Setup-${app.getVersion()}.exe`;
   const updateDir = getAistudyDataPath("updates");
   const filePath = path.join(updateDir, fileName);

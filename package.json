@@ -1,6 +1,6 @@
 {
   "name": "aistudy",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "AIstudy desktop shell.",
   "author": "SnowLove0303",
   "private": false,
@@ -10,7 +10,10 @@
   },
   "aistudy": {
     "updateRepository": "https://github.com/SnowLove0303/AIstudy-Public.git",
-    "updateAssetPattern": "AIstudy-Setup-*.exe"
+    "updateAssetPattern": "AIstudy-Setup-*.exe",
+    "updateDownloadMirrors": [
+      "http://8.219.193.109:6100"
+    ]
   },
   "main": "dist-electron/main.js",
   "type": "module",
