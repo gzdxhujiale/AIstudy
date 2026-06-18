@@ -72,6 +72,14 @@ type UpdateDownloadResult = {
   fileSize: number;
 };
 
+type UpdateDownloadProgress = {
+  fileName: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number;
+  status: "starting" | "downloading" | "complete";
+};
+
 type ErrorLogEntry = {
   id: string;
   source: string;
@@ -146,6 +154,7 @@ declare global {
       download: (downloadUrl: string) => Promise<UpdateDownloadResult>;
       install: (filePath: string) => Promise<boolean>;
       openReleasePage: (releaseUrl: string) => Promise<boolean>;
+      onDownloadProgress: (callback: (progress: UpdateDownloadProgress) => void) => () => void;
     };
     aistudyErrorLogs?: {
       list: (limit?: number) => Promise<ErrorLogEntry[]>;
@@ -196,6 +205,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [updateInfo, setUpdateInfo] = React.useState<UpdateManagerInfo | null>(null);
   const [checkResult, setCheckResult] = React.useState<UpdateCheckResult | null>(null);
   const [downloadResult, setDownloadResult] = React.useState<UpdateDownloadResult | null>(null);
+  const [downloadProgress, setDownloadProgress] = React.useState<UpdateDownloadProgress | null>(null);
   const [diagnosticResult, setDiagnosticResult] = React.useState<RuntimeDiagnosticResult | null>(null);
   const [isCheckingRuntime, setIsCheckingRuntime] = React.useState(false);
   const [runtimeMessage, setRuntimeMessage] = React.useState("");
@@ -217,6 +227,22 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
       .catch((loadError: unknown) => {
         setError(loadError instanceof Error ? loadError.message : "更新服务初始化失败。");
       });
+  }, []);
+
+  React.useEffect(() => {
+    if (!window.aistudyUpdates?.onDownloadProgress) return undefined;
+    return window.aistudyUpdates.onDownloadProgress((progress) => {
+      setDownloadProgress(progress);
+      if (progress.status === "complete") {
+        setStatus("安装包下载完成，可以开始安装。");
+        return;
+      }
+      if (progress.totalBytes > 0) {
+        setStatus(`正在下载更新：${progress.percent}%`);
+      } else {
+        setStatus("正在下载更新...");
+      }
+    });
   }, []);
 
   const runRuntimeDiagnostics = React.useCallback(() => {
@@ -278,6 +304,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
     setStatus("正在检测更新...");
     setError("");
     setDownloadResult(null);
+    setDownloadProgress(null);
 
     window.aistudyUpdates.check()
       .then((result) => {
@@ -298,13 +325,29 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
     setIsDownloading(true);
     setStatus("正在下载安装包...");
     setError("");
+    setDownloadResult(null);
+    setDownloadProgress({
+      fileName: checkResult.assetName || "AIstudy 安装包",
+      downloadedBytes: 0,
+      totalBytes: checkResult.assetSize || 0,
+      percent: 0,
+      status: "starting"
+    });
 
     window.aistudyUpdates.download(checkResult.downloadUrl)
       .then((result) => {
         setDownloadResult(result);
+        setDownloadProgress({
+          fileName: result.fileName,
+          downloadedBytes: result.fileSize,
+          totalBytes: result.fileSize,
+          percent: 100,
+          status: "complete"
+        });
         setStatus("安装包下载完成，可以开始安装。");
       })
       .catch((downloadError: unknown) => {
+        setDownloadProgress(null);
         setError(downloadError instanceof Error ? downloadError.message : "下载更新失败。");
       })
       .finally(() => setIsDownloading(false));
@@ -313,7 +356,13 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
   const installUpdate = React.useCallback(() => {
     if (!window.aistudyUpdates || !downloadResult?.filePath) return;
     setStatus("正在启动安装程序...");
-    void window.aistudyUpdates.install(downloadResult.filePath);
+    setError("");
+    window.aistudyUpdates.install(downloadResult.filePath)
+      .then(() => setStatus("安装程序已启动，当前应用将自动关闭。"))
+      .catch((installError: unknown) => {
+        setError(installError instanceof Error ? installError.message : "安装程序没有启动。");
+        setStatus("");
+      });
   }, [downloadResult]);
 
   const updateStateLabel = checkResult ? (checkResult.hasUpdate ? "发现新版本" : "已是最新") : "待检测";
@@ -331,6 +380,13 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
     ? `已下载 ${downloadResult.fileName}${downloadResult.fileSize ? `（${formatFileSize(downloadResult.fileSize)}）` : ""}`
     : (checkResult?.hasUpdate ? "获取最新安装包，下载完成后可安装。" : "检测到可更新版本后可用。");
   const installDescription = downloadResult ? "启动安装程序并退出当前应用。" : "安装包下载完成后可用。";
+  const visibleDownloadProgress = downloadProgress && (isDownloading || downloadProgress.status === "complete") ? downloadProgress : null;
+  const progressPercent = visibleDownloadProgress ? Math.max(0, Math.min(100, visibleDownloadProgress.percent)) : 0;
+  const progressSizeText = visibleDownloadProgress
+    ? (visibleDownloadProgress.totalBytes > 0
+      ? `${formatFileSize(visibleDownloadProgress.downloadedBytes)} / ${formatFileSize(visibleDownloadProgress.totalBytes)}`
+      : formatFileSize(visibleDownloadProgress.downloadedBytes))
+    : "";
   const settingsPageTitle = activePage === "runtime" ? "环境检查" : activePage === "updates" ? "更新管理" : "报错日志";
 
   return (
@@ -495,6 +551,21 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
                 </span>
                 <span className="update-option-meta">{onlineVersion}</span>
               </button>
+              {visibleDownloadProgress ? (
+                <div className="update-download-progress" aria-label="下载进度">
+                  <div className="update-progress-heading">
+                    <span>{visibleDownloadProgress.status === "complete" ? "下载完成" : "正在下载"}</span>
+                    <strong>{progressPercent}%</strong>
+                  </div>
+                  <div className="update-progress-track" aria-hidden="true">
+                    <span style={{ width: `${progressPercent}%` }} />
+                  </div>
+                  <div className="update-progress-meta">
+                    <span>{visibleDownloadProgress.fileName}</span>
+                    <span>{progressSizeText}</span>
+                  </div>
+                </div>
+              ) : null}
               <button className="update-option-row" type="button" onClick={installUpdate} disabled={!downloadResult}>
                 <span className="update-option-icon"><CheckCircle2 size={18} /></span>
                 <span className="update-option-copy">

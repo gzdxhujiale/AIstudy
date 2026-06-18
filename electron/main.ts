@@ -404,6 +404,14 @@ type UpdateDownloadResult = {
   fileSize: number;
 };
 
+type UpdateDownloadProgress = {
+  fileName: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  percent: number;
+  status: "starting" | "downloading" | "complete";
+};
+
 type RuntimeDiagnosticStatus = "ok" | "warning" | "error" | "disabled";
 
 type RuntimeDiagnosticItem = {
@@ -3251,7 +3259,13 @@ async function checkForUpdates(): Promise<UpdateCheckResult> {
   };
 }
 
-async function downloadUpdate(downloadUrlValue: unknown): Promise<UpdateDownloadResult> {
+function sendUpdateDownloadProgress(event: IpcMainInvokeEvent, progress: UpdateDownloadProgress) {
+  if (!event.sender.isDestroyed()) {
+    event.sender.send("updates:download-progress", progress);
+  }
+}
+
+async function downloadUpdate(event: IpcMainInvokeEvent, downloadUrlValue: unknown): Promise<UpdateDownloadResult> {
   if (typeof downloadUrlValue !== "string" || !downloadUrlValue.startsWith("https://")) {
     throw new Error("下载地址不可用。");
   }
@@ -3260,7 +3274,16 @@ async function downloadUpdate(downloadUrlValue: unknown): Promise<UpdateDownload
   const fileName = decodeURIComponent(path.basename(url.pathname)) || `AIstudy-Setup-${app.getVersion()}.exe`;
   const updateDir = getAistudyDataPath("updates");
   const filePath = path.join(updateDir, fileName);
+  const tempFilePath = path.join(updateDir, `${fileName}.${randomUUID()}.download`);
   await fs.mkdir(updateDir, { recursive: true });
+
+  sendUpdateDownloadProgress(event, {
+    fileName,
+    downloadedBytes: 0,
+    totalBytes: 0,
+    percent: 0,
+    status: "starting"
+  });
 
   const response = await fetch(downloadUrlValue, {
     headers: {
@@ -3272,13 +3295,60 @@ async function downloadUpdate(downloadUrlValue: unknown): Promise<UpdateDownload
     throw new Error(`下载安装包失败：${response.status}`);
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
-  await fs.writeFile(filePath, buffer);
+  const totalBytes = Number(response.headers.get("content-length")) || 0;
+  const bodyReader = response.body?.getReader();
+  if (!bodyReader) {
+    throw new Error("下载安装包失败：没有收到文件内容。");
+  }
+
+  let downloadedBytes = 0;
+  let lastProgressAt = 0;
+  const fileHandle = await fs.open(tempFilePath, "w");
+  try {
+    while (true) {
+      const { done, value } = await bodyReader.read();
+      if (done) break;
+      if (!value) continue;
+
+      const chunk = Buffer.from(value);
+      await fileHandle.write(chunk);
+      downloadedBytes += chunk.byteLength;
+
+      const now = Date.now();
+      if (now - lastProgressAt > 160 || (totalBytes > 0 && downloadedBytes >= totalBytes)) {
+        lastProgressAt = now;
+        sendUpdateDownloadProgress(event, {
+          fileName,
+          downloadedBytes,
+          totalBytes,
+          percent: totalBytes > 0 ? Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)) : 0,
+          status: "downloading"
+        });
+      }
+    }
+  } catch (error) {
+    await fs.rm(tempFilePath, { force: true }).catch(() => undefined);
+    throw error;
+  } finally {
+    await fileHandle.close();
+  }
+
+  await fs.rm(filePath, { force: true }).catch(() => undefined);
+  await fs.rename(tempFilePath, filePath);
+  const downloadedFile = await fs.stat(filePath);
+
+  sendUpdateDownloadProgress(event, {
+    fileName,
+    downloadedBytes: downloadedFile.size,
+    totalBytes: totalBytes || downloadedFile.size,
+    percent: 100,
+    status: "complete"
+  });
 
   return {
     filePath,
     fileName,
-    fileSize: buffer.byteLength
+    fileSize: downloadedFile.size
   };
 }
 
@@ -5208,7 +5278,7 @@ ipcMain.handle("updates:open-release-dir", withUserFacingError("updates:open-rel
 
 ipcMain.handle("updates:check", withUserFacingError("updates:check", "更新检测没有完成，请稍后再试。", () => checkForUpdates()));
 
-ipcMain.handle("updates:download", withUserFacingError("updates:download", "安装包下载没有完成，请稍后再试。", (_event, downloadUrl) => downloadUpdate(downloadUrl)));
+ipcMain.handle("updates:download", withUserFacingError("updates:download", "安装包下载没有完成，请稍后再试。", (event, downloadUrl) => downloadUpdate(event as IpcMainInvokeEvent, downloadUrl)));
 
 ipcMain.handle("updates:install", withUserFacingError("updates:install", "安装程序没有启动，请稍后再试。", (_event, filePath) => installUpdate(filePath)));
 
