@@ -59,6 +59,37 @@ function Test-IsProjectBuildProcess {
     $normalized.StartsWith($releasePrefix)
 }
 
+function Stop-ProjectRuntimeProcesses {
+  param([string] $RuntimePath)
+
+  $runtimeFullPath = [System.IO.Path]::GetFullPath($RuntimePath).ToLowerInvariant()
+  $currentProcessId = $PID
+  $runtimeProcesses = Get-CimInstance Win32_Process | Where-Object {
+    $commandLine = [string] $_.CommandLine
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+      return $false
+    }
+    if ([int] $_.ProcessId -eq $currentProcessId) {
+      return $false
+    }
+    return $commandLine.ToLowerInvariant().Contains($runtimeFullPath)
+  }
+
+  if (-not $runtimeProcesses) {
+    return
+  }
+
+  foreach ($runtimeProcess in $runtimeProcesses) {
+    Write-Host ("[AIstudy Public] Stop runtime PID {0}: {1}" -f $runtimeProcess.ProcessId, $runtimeProcess.Name)
+    try {
+      Stop-Process -Id $runtimeProcess.ProcessId -Force -ErrorAction Stop
+    } catch [Microsoft.PowerShell.Commands.ProcessCommandException] {
+      Write-Host ("[AIstudy Public] Runtime PID {0} already exited." -f $runtimeProcess.ProcessId)
+    }
+  }
+  Start-Sleep -Milliseconds 800
+}
+
 function Save-PortableRuntimeData {
   $portableFullPath = [System.IO.Path]::GetFullPath($portableDataDir)
   $releaseFullPath = [System.IO.Path]::GetFullPath($releaseRoot)
@@ -135,6 +166,7 @@ if ($oldProcesses) {
 
 try {
   Write-Host "[AIstudy Public] Cleaning stale packaging artifacts..."
+  Stop-ProjectRuntimeProcesses $portableDataDir
   Save-PortableRuntimeData
   Remove-BuildArtifact (Join-Path $releaseRoot "win-unpacked")
   Remove-BuildArtifact (Join-Path $releaseRoot ("aistudy-public-{0}-x64.nsis.7z" -f $appVersion))
@@ -162,6 +194,7 @@ try {
     }
   }
 } finally {
+  Stop-ProjectRuntimeProcesses $portableDataDir
   Restore-PortableRuntimeData
 }
 

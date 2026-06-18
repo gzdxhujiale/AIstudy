@@ -3082,16 +3082,25 @@ async function runGit(args: string[], cwd: string) {
 }
 
 async function readPackageRepositoryUrl() {
+  const packageJson = await readPackageMetadata();
+  if (typeof packageJson.repository === "string") {
+    return packageJson.repository;
+  }
+  return packageJson.repository?.url ?? "";
+}
+
+async function readPackageMetadata() {
   try {
     const packageJson = JSON.parse(await fs.readFile(path.join(app.getAppPath(), "package.json"), "utf8")) as {
       repository?: string | { url?: string };
+      aistudy?: {
+        updateRepository?: string;
+        updateAssetPattern?: string;
+      };
     };
-    if (typeof packageJson.repository === "string") {
-      return packageJson.repository;
-    }
-    return packageJson.repository?.url ?? "";
+    return packageJson;
   } catch {
-    return "";
+    return {};
   }
 }
 
@@ -3100,6 +3109,23 @@ async function getConfiguredRepositoryUrl(projectRoot?: string) {
   if (packageRepositoryUrl) return packageRepositoryUrl;
   const root = projectRoot ?? await findProjectRoot();
   return await runGit(["remote", "get-url", "origin"], root);
+}
+
+async function getConfiguredUpdateRepositoryUrl(projectRoot?: string) {
+  const packageJson = await readPackageMetadata();
+  const configured = process.env.AISTUDY_PUBLIC_UPDATE_REPOSITORY_URL?.trim()
+    || process.env.AISTUDY_UPDATE_REPOSITORY_URL?.trim()
+    || packageJson.aistudy?.updateRepository?.trim();
+  if (configured) return configured;
+  return await getConfiguredRepositoryUrl(projectRoot);
+}
+
+async function getConfiguredUpdateAssetPattern() {
+  const packageJson = await readPackageMetadata();
+  return process.env.AISTUDY_PUBLIC_UPDATE_ASSET_PATTERN?.trim()
+    || process.env.AISTUDY_UPDATE_ASSET_PATTERN?.trim()
+    || packageJson.aistudy?.updateAssetPattern?.trim()
+    || "";
 }
 
 function toRepositoryWebUrl(remoteUrl: string) {
@@ -3118,6 +3144,11 @@ function parseGitHubRepository(remoteUrl: string) {
     owner: match[1],
     repo: match[2]
   };
+}
+
+function wildcardPatternToRegExp(pattern: string) {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`, "i");
 }
 
 function normalizeVersion(value: string) {
@@ -3156,8 +3187,14 @@ function parseReleaseNotes(body: unknown, releaseName: string) {
   return releaseName ? [`发布版本 ${releaseName}`] : ["发布新版本。"];
 }
 
-function selectInstallerAsset(release: GitHubRelease) {
+async function selectInstallerAsset(release: GitHubRelease) {
   const assets = Array.isArray(release.assets) ? (release.assets as GitHubReleaseAsset[]) : [];
+  const assetPattern = await getConfiguredUpdateAssetPattern();
+  if (assetPattern) {
+    const assetMatcher = wildcardPatternToRegExp(assetPattern);
+    return assets.find((asset) => typeof asset.name === "string" && assetMatcher.test(asset.name)) ?? null;
+  }
+
   return (
     assets.find((asset) => typeof asset.name === "string" && /setup.*\.exe$/i.test(asset.name)) ??
     assets.find((asset) => typeof asset.name === "string" && /\.exe$/i.test(asset.name)) ??
@@ -3166,7 +3203,7 @@ function selectInstallerAsset(release: GitHubRelease) {
 }
 
 async function fetchLatestRelease(): Promise<GitHubRelease> {
-  const repositoryUrl = await getConfiguredRepositoryUrl();
+  const repositoryUrl = await getConfiguredUpdateRepositoryUrl();
   const repository = parseGitHubRepository(repositoryUrl);
   if (!repository) {
     throw new Error("未配置有效的 GitHub 仓库地址。");
@@ -3197,7 +3234,7 @@ async function checkForUpdates(): Promise<UpdateCheckResult> {
     throw new Error("最新版本号读取失败。");
   }
 
-  const asset = selectInstallerAsset(release);
+  const asset = await selectInstallerAsset(release);
   const currentVersion = app.getVersion();
   const releaseName = typeof release.name === "string" ? release.name : `v${latestVersion}`;
   const downloadUrl = typeof asset?.browser_download_url === "string" ? asset.browser_download_url : "";
@@ -3267,7 +3304,7 @@ async function installUpdate(filePathValue: unknown) {
 
 async function getUpdateManagerInfo(): Promise<UpdateManagerInfo> {
   const projectRoot = await findProjectRoot();
-  const repositoryUrl = await getConfiguredRepositoryUrl(projectRoot);
+  const repositoryUrl = await getConfiguredUpdateRepositoryUrl(projectRoot);
   const branch = await runGit(["branch", "--show-current"], projectRoot);
   const commit = await runGit(["rev-parse", "--short", "HEAD"], projectRoot);
   const status = await runGit(["status", "--porcelain"], projectRoot);
