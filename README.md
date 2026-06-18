@@ -5,7 +5,8 @@
 ## Quick Start
 
 ```bash
-npm install
+npm run setup:doctor
+npm run setup:install
 npm run build
 npm run dev
 ```
@@ -13,6 +14,8 @@ npm run dev
 默认 MySQL 数据库为 `aistudy_public`。应用启动时会自动创建数据库和基础表；如果本机没有 MySQL，核心编辑会降级到本地副本，不阻塞界面使用。
 
 可选配置见 `.env.example` 或运行时 `AIstudyPublicData/config/mysql.config.json`。
+
+新机器开发或打包前先运行 `npm run setup:doctor`。弱网或离线打包时，先在有网络的机器运行 `npm run setup:install` 和 `npm run dist:oneclick`，再复制 `node_modules` 与 `.tmp/build-cache`。详见 `docs/deployment-new-machine.md`。
 
 ## Architecture Direction
 

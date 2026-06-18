@@ -4,6 +4,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Resolve-Path (Join-Path $scriptDir "..\..")
 $releaseRoot = Join-Path $projectRoot "release"
 $releasePrefix = (Join-Path $projectRoot "release-").ToLowerInvariant()
+$cacheRoot = Join-Path $projectRoot ".tmp\build-cache"
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $OutputEncoding
 try {
@@ -57,6 +58,14 @@ function Test-IsProjectBuildProcess {
 }
 
 Set-Location $projectRoot
+$npmCache = Join-Path $cacheRoot "npm"
+$electronCache = Join-Path $cacheRoot "electron"
+$electronBuilderCache = Join-Path $cacheRoot "electron-builder"
+New-Item -ItemType Directory -Force -Path $npmCache, $electronCache, $electronBuilderCache | Out-Null
+$env:npm_config_cache = $npmCache
+$env:electron_config_cache = $electronCache
+$env:ELECTRON_BUILDER_CACHE = $electronBuilderCache
+
 $packageJson = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json
 $appVersion = [string] $packageJson.version
 

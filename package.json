@@ -17,6 +17,8 @@
     "pack": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist",
     "dist": "npm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
     "dist:oneclick": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/close-and-dist.ps1",
+    "setup:doctor": "node scripts/setup/check-dev-environment.mjs",
+    "setup:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/install-deps.ps1",
     "import:docx": "node scripts/importers/import-docx-to-node-documents.mjs",
     "audit:docx-import": "node scripts/importers/audit-docx-import.mjs",
     "update:record": "node scripts/update/record-update.mjs"
