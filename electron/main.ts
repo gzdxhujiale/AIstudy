@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, ipcMain, net, shell, type IpcMainInvokeEvent } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -2999,7 +2999,7 @@ async function fetchJsonWithTimeout(url: string, timeoutMs: number) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, {
+    return await net.fetch(url, {
       signal: controller.signal,
       headers: {
         Accept: "application/vnd.github+json",
@@ -3217,7 +3217,7 @@ async function fetchLatestRelease(): Promise<GitHubRelease> {
     throw new Error("未配置有效的 GitHub 仓库地址。");
   }
 
-  const response = await fetch(`https://api.github.com/repos/${repository.owner}/${repository.repo}/releases/latest`, {
+  const response = await net.fetch(`https://api.github.com/repos/${repository.owner}/${repository.repo}/releases/latest`, {
     headers: {
       Accept: "application/vnd.github+json",
       "User-Agent": "AIstudy-Updater"
@@ -3282,7 +3282,7 @@ async function fetchUpdateDownloadRange(downloadUrlValue: string, startByte: num
 
   for (let attempt = 1; attempt <= UPDATE_DOWNLOAD_RETRY_LIMIT; attempt += 1) {
     try {
-      const response = await fetch(downloadUrlValue, {
+      const response = await net.fetch(downloadUrlValue, {
         headers: {
           "User-Agent": "AIstudy-Updater",
           Range: rangeValue
