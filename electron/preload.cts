@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld("aistudyWindow", {
   close: () => invokeApp("window:close")
 });
 
+contextBridge.exposeInMainWorld("aistudyClipboard", {
+  writeText: (text: string) => invokeApp("clipboard:write-text", text)
+});
+
 contextBridge.exposeInMainWorld("aistudyCourses", {
   load: () => invokeApp("courses:load"),
   save: (store: unknown) => invokeApp("courses:save", store),

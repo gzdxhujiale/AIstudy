@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronDown, ChevronRight, Edit3, FolderPlus, MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, Edit3, FolderPlus, MoreHorizontal, Plus, Search, Trash2 } from "lucide-react";
 import type { Course, CourseSection, CourseSyncStatus } from "./courseTypes";
 import { normalizeSectionName, sortByOrderThenUpdated } from "./courseTypes";
 
@@ -35,6 +35,8 @@ const NEW_SECTION_ID = "__new_section__";
 const COURSE_MOVE_MENU_WIDTH = 190;
 const COURSE_MOVE_MENU_GAP = 8;
 const COURSE_MOVE_MENU_MAX_HEIGHT = 230;
+const COURSE_CONTEXT_MENU_WIDTH = 178;
+const COURSE_CONTEXT_MENU_GAP = 8;
 
 type CourseMoveMenuAnchor = {
   courseId: string;
@@ -42,10 +44,22 @@ type CourseMoveMenuAnchor = {
   top: number;
 };
 
+type CourseContextMenuAnchor = CourseMoveMenuAnchor & {
+  copied: boolean;
+};
+
 type DraggingSidebarItem = {
   type: "course" | "section";
   id: string;
 };
+
+declare global {
+  interface Window {
+    aistudyClipboard?: {
+      writeText: (text: string) => Promise<boolean>;
+    };
+  }
+}
 
 export function CourseSidebar({
   sections,
@@ -71,6 +85,7 @@ export function CourseSidebar({
   const [sectionDraft, setSectionDraft] = React.useState("");
   const [openCourseMoveMenuId, setOpenCourseMoveMenuId] = React.useState<string | null>(null);
   const [courseMoveMenuAnchor, setCourseMoveMenuAnchor] = React.useState<CourseMoveMenuAnchor | null>(null);
+  const [courseContextMenuAnchor, setCourseContextMenuAnchor] = React.useState<CourseContextMenuAnchor | null>(null);
   const [isUnsectionedCollapsed, setIsUnsectionedCollapsed] = React.useState(false);
   const [draggingItem, setDraggingItem] = React.useState<DraggingSidebarItem | null>(null);
   const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -113,7 +128,45 @@ export function CourseSidebar({
       setOpenCourseMoveMenuId(null);
       setCourseMoveMenuAnchor(null);
     }
-  }, [courses, openCourseMoveMenuId]);
+    if (courseContextMenuAnchor && !courses.some((course) => course.id === courseContextMenuAnchor.courseId)) {
+      setCourseContextMenuAnchor(null);
+    }
+  }, [courseContextMenuAnchor, courses, openCourseMoveMenuId]);
+
+  React.useEffect(() => {
+    if (!courseContextMenuAnchor) return;
+    function closeMenu(event: PointerEvent) {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(".course-context-menu")) return;
+      setCourseContextMenuAnchor(null);
+    }
+    window.addEventListener("pointerdown", closeMenu, true);
+    return () => window.removeEventListener("pointerdown", closeMenu, true);
+  }, [courseContextMenuAnchor]);
+
+  React.useEffect(() => {
+    if (!courseContextMenuAnchor) return;
+    function closeMenu() {
+      setCourseContextMenuAnchor(null);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") closeMenu();
+    }
+    window.addEventListener("resize", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [courseContextMenuAnchor]);
+
+  const sectionNameById = React.useMemo(() => new Map(sections.map((section) => [section.id, section.name])), [sections]);
+
+  const activeContextMenuCourse = courseContextMenuAnchor
+    ? courses.find((course) => course.id === courseContextMenuAnchor.courseId) ?? null
+    : null;
 
   React.useEffect(() => {
     if (!openCourseMoveMenuId) return;
@@ -148,7 +201,49 @@ export function CourseSidebar({
     setCourseMoveMenuAnchor(null);
   }
 
+  function closeCourseContextMenu() {
+    setCourseContextMenuAnchor(null);
+  }
+
+  function getCoursePath(course: Course) {
+    const sectionName = course.sectionId ? sectionNameById.get(course.sectionId) : "";
+    return ["知识库", sectionName || "未分区", course.name].join(" / ");
+  }
+
+  async function copyCoursePath(course: Course) {
+    const pathText = getCoursePath(course);
+    if (window.aistudyClipboard?.writeText) {
+      await window.aistudyClipboard.writeText(pathText);
+    } else if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(pathText);
+    } else {
+      throw new Error("复制没有完成，请稍后再试。");
+    }
+    setCourseContextMenuAnchor((current) => current && current.courseId === course.id ? { ...current, copied: true } : current);
+    window.setTimeout(() => {
+      setCourseContextMenuAnchor((current) => current && current.courseId === course.id ? null : current);
+    }, 700);
+  }
+
+  function openCourseContextMenu(event: React.MouseEvent<HTMLElement>, course: Course) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeCourseMoveMenu();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const left = Math.min(
+      viewportWidth - COURSE_CONTEXT_MENU_WIDTH - COURSE_CONTEXT_MENU_GAP,
+      Math.max(COURSE_CONTEXT_MENU_GAP, event.clientX)
+    );
+    const top = Math.min(
+      viewportHeight - 48 - COURSE_CONTEXT_MENU_GAP,
+      Math.max(COURSE_CONTEXT_MENU_GAP, event.clientY)
+    );
+    setCourseContextMenuAnchor({ courseId: course.id, left, top, copied: false });
+  }
+
   function toggleCourseMoveMenu(course: Course, button: HTMLButtonElement) {
+    closeCourseContextMenu();
     if (openCourseMoveMenuId === course.id) {
       closeCourseMoveMenu();
       return;
@@ -172,12 +267,14 @@ export function CourseSidebar({
     setEditingSectionId(NEW_SECTION_ID);
     setSectionDraft("");
     closeCourseMoveMenu();
+    closeCourseContextMenu();
   }
 
   function startRenameSection(section: CourseSection) {
     setEditingSectionId(section.id);
     setSectionDraft(section.name);
     closeCourseMoveMenu();
+    closeCourseContextMenu();
   }
 
   function cancelSectionEdit() {
@@ -214,6 +311,7 @@ export function CourseSidebar({
       return;
     }
     closeCourseMoveMenu();
+    closeCourseContextMenu();
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", courseId);
     setDraggingItem({ type: "course", id: courseId });
@@ -225,6 +323,7 @@ export function CourseSidebar({
       return;
     }
     closeCourseMoveMenu();
+    closeCourseContextMenu();
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", sectionId);
     setDraggingItem({ type: "section", id: sectionId });
@@ -450,6 +549,7 @@ export function CourseSidebar({
                           onDragOver={allowCourseDrop}
                           onDrop={(event) => dropCourse(event, course.sectionId && sectionIds.has(course.sectionId) ? course.sectionId : null, course.id)}
                           onDragEnd={clearDrag}
+                          onContextMenu={(event) => openCourseContextMenu(event, course)}
                         >
                           <button className="course-main" type="button" onClick={() => onSelectCourse(course.id)}>
                             <span className="course-page-dot" aria-hidden="true" />
@@ -529,6 +629,23 @@ export function CourseSidebar({
               {sectionOption.name}
             </button>
           ))}
+        </div>
+      ) : null}
+      {activeContextMenuCourse && courseContextMenuAnchor ? (
+        <div
+          className="course-context-menu"
+          role="menu"
+          aria-label={`${activeContextMenuCourse.name} 操作`}
+          style={{ left: courseContextMenuAnchor.left, top: courseContextMenuAnchor.top }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void copyCoursePath(activeContextMenuCourse)}
+          >
+            <Copy size={14} />
+            <span>{courseContextMenuAnchor.copied ? "已复制路径" : "复制路径"}</span>
+          </button>
         </div>
       ) : null}
     </section>

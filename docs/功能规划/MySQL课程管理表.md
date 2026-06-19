@@ -10,9 +10,12 @@
 
 1. 环境变量。
 2. `mysql.config.json`，可放在应用可执行文件同级目录。
-3. `AIstudyPublicData/config/mysql.config.json`，用于可迁移部署。
-4. `mysql.config.json`，可放在 Electron `userData` 目录，兼容旧版本。
-5. 默认值。
+3. 旧版 `AIstudyData/config/mysql.config.json`，用于升级兼容。
+4. `AIstudyPublicData/config/mysql.config.json`，用于可迁移部署。
+5. `mysql.config.json`，可放在 Electron `userData` 目录，兼容旧版本。
+6. 默认值。
+
+如果配置没有显式指定 `database`，启动时会自动检测 `aistudy_public` 和旧 `aistudy`，优先使用已经存在课程、导图或 Word 文档数据的数据库。升级安装包只更新程序文件，不允许把用户带到空库，也不允许清空或覆盖已有 MySQL 数据。
 
 支持的配置项：
 

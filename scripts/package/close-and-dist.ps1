@@ -144,7 +144,7 @@ $env:npm_config_cache = $npmCache
 $env:electron_config_cache = $electronCache
 $env:ELECTRON_BUILDER_CACHE = $electronBuilderCache
 
-$packageJson = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") -Raw | ConvertFrom-Json
+$packageJson = Get-Content -LiteralPath (Join-Path $projectRoot "package.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 $appVersion = [string] $packageJson.version
 
 Write-Host "[AIstudy] Closing old packaged app instances..."

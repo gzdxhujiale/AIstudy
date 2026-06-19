@@ -1,9 +1,9 @@
-import { app, BrowserWindow, ipcMain, net, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, net, shell, type IpcMainInvokeEvent } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
-import mysql, { type Pool, type PoolConnection, type RowDataPacket } from "mysql2/promise";
+import mysql, { type Connection, type Pool, type PoolConnection, type RowDataPacket } from "mysql2/promise";
 import { Socket } from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -2050,6 +2050,34 @@ async function readMysqlConfigFile(filePath: string) {
   }
 }
 
+function uniquePaths(paths: string[]) {
+  const seen = new Set<string>();
+  return paths.filter((item) => {
+    const normalized = path.normalize(item).toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
+}
+
+function getLegacyAistudyDataRoots() {
+  const exeDir = isDev ? app.getAppPath() : path.dirname(app.getPath("exe"));
+  const roots = [
+    path.join(exeDir, "AIstudyData"),
+    "F:\\AIstudyData",
+    path.join(app.getPath("userData"), "AIstudyData")
+  ];
+  return uniquePaths(roots).filter((root) => root !== getAistudyDataRoot());
+}
+
+async function readFirstExistingMysqlConfigFile(filePaths: string[]) {
+  for (const filePath of uniquePaths(filePaths)) {
+    const config = await readMysqlConfigFile(filePath);
+    if (Object.keys(config).length > 0) return config;
+  }
+  return {};
+}
+
 function readPublicRuntimeEnv(name: string) {
   return process.env[`AISTUDY_PUBLIC_${name}`] ?? process.env[`AISTUDY_${name}`];
 }
@@ -2058,12 +2086,94 @@ function readPublicMysqlEnv(name: string) {
   return readPublicRuntimeEnv(`MYSQL_${name}`);
 }
 
+function hasExplicitMysqlDatabaseConfig(mergedConfig: Partial<MysqlConfig>) {
+  return getStringSetting(readPublicMysqlEnv("DATABASE"), "") !== "" || getStringSetting(readSetting(mergedConfig, "database"), "") !== "";
+}
+
+async function mysqlDatabaseHasApplicationData(
+  connection: Connection,
+  database: string,
+  tableNames: string[]
+) {
+  validateMysqlIdentifier(database, "MySQL database");
+  const [schemaRows] = await connection.execute<RowDataPacket[]>(
+    `SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ? LIMIT 1`,
+    [database]
+  );
+  if (schemaRows.length === 0) return 0;
+
+  let score = 1;
+  for (const tableName of tableNames) {
+    validateMysqlIdentifier(tableName, "MySQL table");
+    const [tableRows] = await connection.execute<RowDataPacket[]>(
+      `SELECT TABLE_NAME
+       FROM INFORMATION_SCHEMA.TABLES
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+       LIMIT 1`,
+      [database, tableName]
+    );
+    if (tableRows.length === 0) continue;
+    score += 5;
+
+    const [countRows] = await connection.query<RowDataPacket[]>(
+      `SELECT COUNT(*) AS rowCount FROM ${escapeMysqlIdentifier(database, "MySQL database")}.${escapeMysqlIdentifier(tableName, "MySQL table")}`
+    );
+    const rowCount = Number(countRows[0]?.rowCount) || 0;
+    score += Math.min(rowCount, 1000) * 10;
+  }
+  return score;
+}
+
+async function detectMysqlDatabase(config: MysqlConfig, defaultDatabase: string) {
+  const candidates = Array.from(new Set([defaultDatabase, "aistudy_public", "aistudy"].filter(Boolean)));
+  const connection = await mysql.createConnection({
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password
+  });
+
+  try {
+    const tableNames = [
+      config.courseTable,
+      config.courseSectionTable,
+      config.mindMapTable,
+      config.mindMapNodeTable,
+      config.knowledgeDocumentTable,
+      config.knowledgeDocumentSnapshotTable
+    ];
+    const scored = [];
+    for (const database of candidates) {
+      scored.push({
+        database,
+        score: await mysqlDatabaseHasApplicationData(connection, database, tableNames)
+      });
+    }
+    scored.sort((left, right) => right.score - left.score);
+    const best = scored[0];
+    const defaultScore = scored.find((item) => item.database === defaultDatabase)?.score ?? 0;
+    if (best && best.database !== defaultDatabase && best.score > Math.max(defaultScore, 1)) {
+      console.info(`AIstudy selected existing MySQL database "${best.database}" instead of empty/default "${defaultDatabase}".`);
+      return best.database;
+    }
+  } finally {
+    await connection.end();
+  }
+
+  return defaultDatabase;
+}
+
 async function readMysqlConfig(): Promise<MysqlConfig> {
   const executableConfig = await readMysqlConfigFile(path.join(path.dirname(process.execPath), "mysql.config.json"));
+  const legacyDataRootConfig = await readFirstExistingMysqlConfigFile(
+    getLegacyAistudyDataRoots().map((root) => path.join(root, "config", "mysql.config.json"))
+  );
   const dataRootConfig = await readMysqlConfigFile(getAistudyDataPath("config", "mysql.config.json"));
   const userConfig = await readMysqlConfigFile(path.join(app.getPath("userData"), "mysql.config.json"));
-  const mergedConfig = { ...executableConfig, ...dataRootConfig, ...userConfig };
+  const mergedConfig = { ...executableConfig, ...legacyDataRootConfig, ...dataRootConfig, ...userConfig };
+  const explicitDatabase = hasExplicitMysqlDatabaseConfig(mergedConfig);
 
+  const configuredDatabase = getStringSetting(readPublicMysqlEnv("DATABASE"), getStringSetting(readSetting(mergedConfig, "database"), "aistudy_public"));
   const config = {
     host: getStringSetting(readPublicMysqlEnv("HOST"), getStringSetting(readSetting(mergedConfig, "host"), "127.0.0.1")),
     port: parsePort(readPublicMysqlEnv("PORT"), parsePort(readSetting(mergedConfig, "port"), 3306)),
@@ -2071,7 +2181,7 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
     password: typeof readPublicMysqlEnv("PASSWORD") === "string"
       ? readPublicMysqlEnv("PASSWORD") ?? ""
         : getStringSetting(readSetting(mergedConfig, "password"), ""),
-    database: getStringSetting(readPublicMysqlEnv("DATABASE"), getStringSetting(readSetting(mergedConfig, "database"), "aistudy_public")),
+    database: configuredDatabase,
     courseTable: getStringSetting(
       readPublicMysqlEnv("COURSE_TABLE"),
       getStringSetting(readSetting(mergedConfig, "courseTable"), "course_management_courses")
@@ -2113,6 +2223,14 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
       getStringSetting(readSetting(mergedConfig, "errorLogTable"), "app_error_logs")
     )
   };
+
+  if (!explicitDatabase) {
+    try {
+      config.database = await detectMysqlDatabase(config, configuredDatabase);
+    } catch (error) {
+      console.warn("AIstudy MySQL database auto-detection failed. Continuing with default database.", error);
+    }
+  }
 
   validateMysqlIdentifier(config.database, "MySQL database");
   validateMysqlIdentifier(config.courseTable, "MySQL course table");
@@ -5463,6 +5581,14 @@ ipcMain.handle("app:before-close-complete", (_event, token: unknown) => {
   resolve();
   return true;
 });
+
+ipcMain.handle("clipboard:write-text", withUserFacingError("clipboard:write-text", "复制没有完成，请稍后再试。", (_event, text) => {
+  if (typeof text !== "string" || !text.trim()) {
+    throw createAppError("APP_INVALID_ARGUMENT", "Clipboard text must be a non-empty string.");
+  }
+  clipboard.writeText(text);
+  return true;
+}));
 
 ipcMain.handle("courses:load", withUserFacingError("courses:load", "课程读取没有完成，请稍后再试。", () => readCourseStore()));
 
