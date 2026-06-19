@@ -70,6 +70,14 @@ type CourseCreateRequest = {
   sectionId?: unknown;
 };
 
+type CourseLocatorRequest = {
+  courseId?: unknown;
+  courseName?: unknown;
+  courseDescription?: unknown;
+  sectionId?: unknown;
+  sectionName?: unknown;
+};
+
 type CourseRenameRequest = {
   id?: unknown;
   name?: unknown;
@@ -2084,6 +2092,61 @@ function readPublicRuntimeEnv(name: string) {
 
 function readPublicMysqlEnv(name: string) {
   return readPublicRuntimeEnv(`MYSQL_${name}`);
+}
+
+function sanitizeLocatorFileName(value: string) {
+  return value
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "course";
+}
+
+async function createCourseLocatorFile(input: CourseLocatorRequest) {
+  const courseId = normalizeId(input?.courseId, "Course id");
+  const courseName = getNonEmptyString(input?.courseName, "未命名知识库").slice(0, 120);
+  const courseDescription = getNonEmptyString(input?.courseDescription, "").slice(0, 500);
+  const sectionId = getNonEmptyString(input?.sectionId, "");
+  const sectionName = getNonEmptyString(input?.sectionName, "");
+  const mysqlConfig = await readMysqlConfig();
+  const locatorDir = getAistudyDataPath("locators", "courses");
+  const locatorPath = path.join(locatorDir, `${sanitizeLocatorFileName(courseName)}__${courseId}.aistudy-course.json`);
+  const locator = {
+    version: 1,
+    kind: "aistudy-course-locator",
+    createdAt: new Date().toISOString(),
+    app: {
+      name: "AIstudy",
+      version: app.getVersion()
+    },
+    local: {
+      dataRoot: getAistudyDataRoot(),
+      locatorPath
+    },
+    mysql: {
+      host: mysqlConfig.host,
+      port: mysqlConfig.port,
+      database: mysqlConfig.database,
+      tables: {
+        courses: mysqlConfig.courseTable,
+        sections: mysqlConfig.courseSectionTable,
+        mindMaps: mysqlConfig.mindMapTable,
+        mindMapNodes: mysqlConfig.mindMapNodeTable,
+        documents: mysqlConfig.knowledgeDocumentTable,
+        documentSnapshots: mysqlConfig.knowledgeDocumentSnapshotTable
+      }
+    },
+    course: {
+      id: courseId,
+      name: courseName,
+      description: courseDescription,
+      sectionId: sectionId || null,
+      sectionName: sectionName || null
+    }
+  };
+  await fs.mkdir(locatorDir, { recursive: true });
+  await fs.writeFile(locatorPath, `${JSON.stringify(locator, null, 2)}\n`, "utf8");
+  return locatorPath;
 }
 
 function hasExplicitMysqlDatabaseConfig(mergedConfig: Partial<MysqlConfig>) {
@@ -5589,6 +5652,8 @@ ipcMain.handle("clipboard:write-text", withUserFacingError("clipboard:write-text
   clipboard.writeText(text);
   return true;
 }));
+
+ipcMain.handle("course-locators:create", withUserFacingError("course-locators:create", "路径生成没有完成，请稍后再试。", (_event, input) => createCourseLocatorFile(input as CourseLocatorRequest)));
 
 ipcMain.handle("courses:load", withUserFacingError("courses:load", "课程读取没有完成，请稍后再试。", () => readCourseStore()));
 

@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld("aistudyClipboard", {
   writeText: (text: string) => invokeApp("clipboard:write-text", text)
 });
 
+contextBridge.exposeInMainWorld("aistudyCourseLocators", {
+  createPath: (input: unknown) => invokeApp("course-locators:create", input)
+});
+
 contextBridge.exposeInMainWorld("aistudyCourses", {
   load: () => invokeApp("courses:load"),
   save: (store: unknown) => invokeApp("courses:save", store),

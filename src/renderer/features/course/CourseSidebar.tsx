@@ -58,6 +58,15 @@ declare global {
     aistudyClipboard?: {
       writeText: (text: string) => Promise<boolean>;
     };
+    aistudyCourseLocators?: {
+      createPath: (input: {
+        courseId: string;
+        courseName: string;
+        courseDescription: string;
+        sectionId: string | null;
+        sectionName: string;
+      }) => Promise<string>;
+    };
   }
 }
 
@@ -205,13 +214,18 @@ export function CourseSidebar({
     setCourseContextMenuAnchor(null);
   }
 
-  function getCoursePath(course: Course) {
-    const sectionName = course.sectionId ? sectionNameById.get(course.sectionId) : "";
-    return ["知识库", sectionName || "未分区", course.name].join(" / ");
-  }
-
   async function copyCoursePath(course: Course) {
-    const pathText = getCoursePath(course);
+    const sectionName = course.sectionId ? sectionNameById.get(course.sectionId) ?? "" : "";
+    const pathText = await window.aistudyCourseLocators?.createPath?.({
+      courseId: course.id,
+      courseName: course.name,
+      courseDescription: course.description,
+      sectionId: course.sectionId,
+      sectionName
+    });
+    if (!pathText) {
+      throw new Error("路径生成没有完成，请稍后再试。");
+    }
     if (window.aistudyClipboard?.writeText) {
       await window.aistudyClipboard.writeText(pathText);
     } else if (navigator.clipboard?.writeText) {
@@ -644,7 +658,7 @@ export function CourseSidebar({
             onClick={() => void copyCoursePath(activeContextMenuCourse)}
           >
             <Copy size={14} />
-            <span>{courseContextMenuAnchor.copied ? "已复制路径" : "复制路径"}</span>
+            <span>{courseContextMenuAnchor.copied ? "已复制本地路径" : "复制本地路径"}</span>
           </button>
         </div>
       ) : null}

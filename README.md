@@ -42,6 +42,7 @@ See `docs/ARCHITECTURE.md`.
 - Course and section changes use command-style IPC instead of renderer-side full-store writes.
 - MySQL is the formal source for course and section indexes.
 - Course and section ordering uses dedicated reorder commands, so drag-and-drop does not rewrite the whole store from the renderer.
+- Course right-click "copy local path" creates a local locator file under `AIstudyPublicData/locators/courses`, so other Codex sessions can open that file and immediately find the MySQL database, course id, and related tables.
 - `courses.json` is only a lightweight local mirror and fallback when MySQL is unavailable.
 - If MySQL write fails, course and section commands append a lightweight operation to `course-pending-operations.json`; the next successful `courses:load` replays those operations before reading MySQL.
 - `courses.json` and `course-pending-operations.json` are written atomically. If either file is unreadable, the app quarantines it with a `.corrupt-*.json` suffix instead of blocking startup.
