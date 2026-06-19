@@ -28,6 +28,10 @@
     "setup:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/install-deps.ps1",
     "import:docx": "node scripts/importers/import-docx-to-node-documents.mjs",
     "audit:docx-import": "node scripts/importers/audit-docx-import.mjs",
+    "arch:knowledge:index": "node scripts/architecture-knowledge/sync-architecture-doc.mjs --write-index=docs/architecture-knowledge/AIstudy-full-architecture-nodes.generated.md",
+    "arch:knowledge:sync": "node scripts/architecture-knowledge/sync-architecture-doc.mjs",
+    "codex:handoff:sync": "node scripts/architecture-knowledge/sync-architecture-doc.mjs --file=docs/codex/CODEX_HANDOFF.md --node-id=arch_14_scripts_docs_09 --title=\"Codex 接手公开版项目指引\"",
+    "codex:handoff:commit": "node scripts/architecture-knowledge/sync-architecture-doc.mjs --file=docs/codex/CODEX_HANDOFF.md --node-id=arch_14_scripts_docs_09 --title=\"Codex 接手公开版项目指引\" --commit",
     "update:record": "node scripts/update/record-update.mjs"
   },
   "dependencies": {

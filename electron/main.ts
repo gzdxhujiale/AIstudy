@@ -587,22 +587,22 @@ function getChromePortDefinition(platformId: unknown) {
 }
 
 function getAistudyDataRoot() {
-  const configuredDataRoot = process.env.AISTUDY_DATA_ROOT?.trim();
+  const configuredDataRoot = process.env.AISTUDY_PUBLIC_DATA_ROOT?.trim() || process.env.AISTUDY_DATA_ROOT?.trim();
   if (configuredDataRoot) return configuredDataRoot;
   if (isDev) return path.join(app.getAppPath(), ".runtime");
 
   const exeDir = path.dirname(app.getPath("exe"));
   const exeDirRoot = path.parse(exeDir).root;
   if (exeDirRoot && !exeDirRoot.toLowerCase().startsWith("c:")) {
-    return path.join(exeDir, "AIstudyData");
+    return path.join(exeDir, "AIstudyPublicData");
   }
 
   const fDriveRoot = "F:\\";
   if (existsSync(fDriveRoot)) {
-    return path.join(fDriveRoot, "AIstudyData");
+    return path.join(fDriveRoot, "AIstudyPublicData");
   }
 
-  return path.join(app.getPath("userData"), "AIstudyData");
+  return path.join(app.getPath("userData"), "AIstudyPublicData");
 }
 
 function getAistudyDataPath(...segments: string[]) {
@@ -610,7 +610,7 @@ function getAistudyDataPath(...segments: string[]) {
 }
 
 function getChromePortRuntimeRoot() {
-  const configuredRoot = process.env.AISTUDY_RUNTIME_ROOT?.trim();
+  const configuredRoot = process.env.AISTUDY_PUBLIC_RUNTIME_ROOT?.trim() || process.env.AISTUDY_RUNTIME_ROOT?.trim();
   if (configuredRoot) return configuredRoot;
   return getAistudyDataPath("runtime");
 }
@@ -2050,6 +2050,14 @@ async function readMysqlConfigFile(filePath: string) {
   }
 }
 
+function readPublicRuntimeEnv(name: string) {
+  return process.env[`AISTUDY_PUBLIC_${name}`] ?? process.env[`AISTUDY_${name}`];
+}
+
+function readPublicMysqlEnv(name: string) {
+  return readPublicRuntimeEnv(`MYSQL_${name}`);
+}
+
 async function readMysqlConfig(): Promise<MysqlConfig> {
   const executableConfig = await readMysqlConfigFile(path.join(path.dirname(process.execPath), "mysql.config.json"));
   const dataRootConfig = await readMysqlConfigFile(getAistudyDataPath("config", "mysql.config.json"));
@@ -2057,51 +2065,51 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
   const mergedConfig = { ...executableConfig, ...dataRootConfig, ...userConfig };
 
   const config = {
-    host: getStringSetting(process.env.AISTUDY_MYSQL_HOST, getStringSetting(readSetting(mergedConfig, "host"), "127.0.0.1")),
-    port: parsePort(process.env.AISTUDY_MYSQL_PORT, parsePort(readSetting(mergedConfig, "port"), 3306)),
-    user: getStringSetting(process.env.AISTUDY_MYSQL_USER, getStringSetting(readSetting(mergedConfig, "user"), "root")),
-    password: typeof process.env.AISTUDY_MYSQL_PASSWORD === "string"
-      ? process.env.AISTUDY_MYSQL_PASSWORD
-      : getStringSetting(readSetting(mergedConfig, "password"), ""),
-    database: getStringSetting(process.env.AISTUDY_MYSQL_DATABASE, getStringSetting(readSetting(mergedConfig, "database"), "aistudy")),
+    host: getStringSetting(readPublicMysqlEnv("HOST"), getStringSetting(readSetting(mergedConfig, "host"), "127.0.0.1")),
+    port: parsePort(readPublicMysqlEnv("PORT"), parsePort(readSetting(mergedConfig, "port"), 3306)),
+    user: getStringSetting(readPublicMysqlEnv("USER"), getStringSetting(readSetting(mergedConfig, "user"), "root")),
+    password: typeof readPublicMysqlEnv("PASSWORD") === "string"
+      ? readPublicMysqlEnv("PASSWORD") ?? ""
+        : getStringSetting(readSetting(mergedConfig, "password"), ""),
+    database: getStringSetting(readPublicMysqlEnv("DATABASE"), getStringSetting(readSetting(mergedConfig, "database"), "aistudy_public")),
     courseTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_COURSE_TABLE,
+      readPublicMysqlEnv("COURSE_TABLE"),
       getStringSetting(readSetting(mergedConfig, "courseTable"), "course_management_courses")
     ),
     courseSectionTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_COURSE_SECTION_TABLE,
+      readPublicMysqlEnv("COURSE_SECTION_TABLE"),
       getStringSetting(readSetting(mergedConfig, "courseSectionTable"), "knowledge_sections")
     ),
     mindMapTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_MIND_MAP_TABLE,
+      readPublicMysqlEnv("MIND_MAP_TABLE"),
       getStringSetting(readSetting(mergedConfig, "mindMapTable"), "mind_maps")
     ),
     mindMapSnapshotTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_MIND_MAP_SNAPSHOT_TABLE,
+      readPublicMysqlEnv("MIND_MAP_SNAPSHOT_TABLE"),
       getStringSetting(readSetting(mergedConfig, "mindMapSnapshotTable"), "mind_map_snapshots")
     ),
     mindMapNodeTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_MIND_MAP_NODE_TABLE,
+      readPublicMysqlEnv("MIND_MAP_NODE_TABLE"),
       getStringSetting(readSetting(mergedConfig, "mindMapNodeTable"), "mind_map_nodes")
     ),
     knowledgeDocumentTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_KNOWLEDGE_DOCUMENT_TABLE,
+      readPublicMysqlEnv("KNOWLEDGE_DOCUMENT_TABLE"),
       getStringSetting(readSetting(mergedConfig, "knowledgeDocumentTable"), "knowledge_documents")
     ),
     knowledgeDocumentSnapshotTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_KNOWLEDGE_DOCUMENT_SNAPSHOT_TABLE,
+      readPublicMysqlEnv("KNOWLEDGE_DOCUMENT_SNAPSHOT_TABLE"),
       getStringSetting(readSetting(mergedConfig, "knowledgeDocumentSnapshotTable"), "knowledge_document_snapshots")
     ),
     assetTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_ASSET_TABLE,
+      readPublicMysqlEnv("ASSET_TABLE"),
       getStringSetting(readSetting(mergedConfig, "assetTable"), "knowledge_assets")
     ),
     knowledgeAssetLinkTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_KNOWLEDGE_ASSET_LINK_TABLE,
+      readPublicMysqlEnv("KNOWLEDGE_ASSET_LINK_TABLE"),
       getStringSetting(readSetting(mergedConfig, "knowledgeAssetLinkTable"), "knowledge_asset_links")
     ),
     errorLogTable: getStringSetting(
-      process.env.AISTUDY_MYSQL_ERROR_LOG_TABLE,
+      readPublicMysqlEnv("ERROR_LOG_TABLE"),
       getStringSetting(readSetting(mergedConfig, "errorLogTable"), "app_error_logs")
     )
   };
@@ -2951,7 +2959,7 @@ async function checkRuntimeDataRoot(): Promise<RuntimeDiagnosticItem> {
     await fs.rm(probePath, { force: true });
     return createDiagnosticItem("data-root", "核心数据目录", "ok", "数据目录可以正常读写。", "无需处理。", false);
   } catch {
-    return createDiagnosticItem("data-root", "核心数据目录", "error", "数据目录暂时不可写，保存和迁移可能受影响。", "请检查磁盘权限，或用 AISTUDY_DATA_ROOT 指定可写目录。");
+    return createDiagnosticItem("data-root", "核心数据目录", "error", "数据目录暂时不可写，保存和迁移可能受影响。", "请检查磁盘权限，或用 AISTUDY_PUBLIC_DATA_ROOT 指定可写目录。");
   }
 }
 

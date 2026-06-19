@@ -371,11 +371,11 @@ async function loadMysqlConfig() {
     fileConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
   }
   return {
-    host: process.env.AISTUDY_MYSQL_HOST || fileConfig.host || "127.0.0.1",
-    port: Number(process.env.AISTUDY_MYSQL_PORT || fileConfig.port || 3306),
-    user: process.env.AISTUDY_MYSQL_USER || fileConfig.user || "root",
-    password: process.env.AISTUDY_MYSQL_PASSWORD ?? fileConfig.password ?? "",
-    database: process.env.AISTUDY_MYSQL_DATABASE || fileConfig.database || "aistudy"
+    host: process.env.AISTUDY_PUBLIC_MYSQL_HOST || process.env.AISTUDY_MYSQL_HOST || fileConfig.host || "127.0.0.1",
+    port: Number(process.env.AISTUDY_PUBLIC_MYSQL_PORT || process.env.AISTUDY_MYSQL_PORT || fileConfig.port || 3306),
+    user: process.env.AISTUDY_PUBLIC_MYSQL_USER || process.env.AISTUDY_MYSQL_USER || fileConfig.user || "root",
+    password: process.env.AISTUDY_PUBLIC_MYSQL_PASSWORD ?? process.env.AISTUDY_MYSQL_PASSWORD ?? fileConfig.password ?? "",
+    database: process.env.AISTUDY_PUBLIC_MYSQL_DATABASE || process.env.AISTUDY_MYSQL_DATABASE || fileConfig.database || "aistudy_public"
   };
 }
 

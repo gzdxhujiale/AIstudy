@@ -10,7 +10,7 @@
 
 1. 环境变量。
 2. `mysql.config.json`，可放在应用可执行文件同级目录。
-3. `AIstudyData/config/mysql.config.json`，用于可迁移部署。
+3. `AIstudyPublicData/config/mysql.config.json`，用于可迁移部署。
 4. `mysql.config.json`，可放在 Electron `userData` 目录，兼容旧版本。
 5. 默认值。
 
@@ -18,21 +18,21 @@
 
 | 字段 | 环境变量 | 默认值 |
 | --- | --- | --- |
-| `host` | `AISTUDY_MYSQL_HOST` | `127.0.0.1` |
-| `port` | `AISTUDY_MYSQL_PORT` | `3306` |
-| `user` | `AISTUDY_MYSQL_USER` | `root` |
-| `password` | `AISTUDY_MYSQL_PASSWORD` | 空字符串 |
-| `database` | `AISTUDY_MYSQL_DATABASE` | `aistudy` |
-| `courseTable` | `AISTUDY_MYSQL_COURSE_TABLE` | `course_management_courses` |
-| `courseSectionTable` | `AISTUDY_MYSQL_COURSE_SECTION_TABLE` | `knowledge_sections` |
-| `mindMapTable` | `AISTUDY_MYSQL_MIND_MAP_TABLE` | `mind_maps` |
-| `mindMapSnapshotTable` | `AISTUDY_MYSQL_MIND_MAP_SNAPSHOT_TABLE` | `mind_map_snapshots` |
-| `mindMapNodeTable` | `AISTUDY_MYSQL_MIND_MAP_NODE_TABLE` | `mind_map_nodes` |
-| `knowledgeDocumentTable` | `AISTUDY_MYSQL_KNOWLEDGE_DOCUMENT_TABLE` | `knowledge_documents` |
-| `knowledgeDocumentSnapshotTable` | `AISTUDY_MYSQL_KNOWLEDGE_DOCUMENT_SNAPSHOT_TABLE` | `knowledge_document_snapshots` |
-| `assetTable` | `AISTUDY_MYSQL_ASSET_TABLE` | `knowledge_assets` |
-| `knowledgeAssetLinkTable` | `AISTUDY_MYSQL_KNOWLEDGE_ASSET_LINK_TABLE` | `knowledge_asset_links` |
-| `errorLogTable` | `AISTUDY_MYSQL_ERROR_LOG_TABLE` | `app_error_logs` |
+| `host` | `AISTUDY_PUBLIC_MYSQL_HOST` | `127.0.0.1` |
+| `port` | `AISTUDY_PUBLIC_MYSQL_PORT` | `3306` |
+| `user` | `AISTUDY_PUBLIC_MYSQL_USER` | `root` |
+| `password` | `AISTUDY_PUBLIC_MYSQL_PASSWORD` | 空字符串 |
+| `database` | `AISTUDY_PUBLIC_MYSQL_DATABASE` | `aistudy_public` |
+| `courseTable` | `AISTUDY_PUBLIC_MYSQL_COURSE_TABLE` | `course_management_courses` |
+| `courseSectionTable` | `AISTUDY_PUBLIC_MYSQL_COURSE_SECTION_TABLE` | `knowledge_sections` |
+| `mindMapTable` | `AISTUDY_PUBLIC_MYSQL_MIND_MAP_TABLE` | `mind_maps` |
+| `mindMapSnapshotTable` | `AISTUDY_PUBLIC_MYSQL_MIND_MAP_SNAPSHOT_TABLE` | `mind_map_snapshots` |
+| `mindMapNodeTable` | `AISTUDY_PUBLIC_MYSQL_MIND_MAP_NODE_TABLE` | `mind_map_nodes` |
+| `knowledgeDocumentTable` | `AISTUDY_PUBLIC_MYSQL_KNOWLEDGE_DOCUMENT_TABLE` | `knowledge_documents` |
+| `knowledgeDocumentSnapshotTable` | `AISTUDY_PUBLIC_MYSQL_KNOWLEDGE_DOCUMENT_SNAPSHOT_TABLE` | `knowledge_document_snapshots` |
+| `assetTable` | `AISTUDY_PUBLIC_MYSQL_ASSET_TABLE` | `knowledge_assets` |
+| `knowledgeAssetLinkTable` | `AISTUDY_PUBLIC_MYSQL_KNOWLEDGE_ASSET_LINK_TABLE` | `knowledge_asset_links` |
+| `errorLogTable` | `AISTUDY_PUBLIC_MYSQL_ERROR_LOG_TABLE` | `app_error_logs` |
 
 `mysql.config.json` 示例：
 
@@ -42,7 +42,7 @@
   "port": 3306,
   "user": "root",
   "password": "",
-  "database": "aistudy",
+  "database": "aistudy_public",
   "courseTable": "course_management_courses",
   "courseSectionTable": "knowledge_sections",
   "mindMapTable": "mind_maps",

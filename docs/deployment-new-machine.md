@@ -37,7 +37,7 @@ npm run dist:oneclick
 npm run setup:doctor
 ```
 
-检查通过后即可打包。MySQL 不存在时，核心学习区仍会走本机副本模式；需要正式同步时再配置 `AISTUDY_MYSQL_*` 或 `AIstudyData/config/mysql.config.json`。
+检查通过后即可打包。MySQL 不存在时，核心学习区仍会走本机副本模式；需要正式同步时再配置 `AISTUDY_PUBLIC_MYSQL_*` 或 `AIstudyPublicData/config/mysql.config.json`。
 
 ## 设计依据
 

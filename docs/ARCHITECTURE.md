@@ -239,7 +239,7 @@ Raw implementation errors must stay out of product pages. IPC handlers return us
 
 Word detail storage has its own implementation constraint in `docs/功能规划/Word详细内容存储约束.md`. That contract is stricter than the early architecture sketch: Word content belongs to `knowledge_document_snapshots`, while `knowledge_documents` is only the node-level current pointer and strong index.
 
-Reusable deployment rules are tracked in `docs/功能规划/开箱即用与外部接入规划.md`. Runtime files should converge under `AIstudyData`; external integrations such as MySQL, Chrome ports, AI web sessions, and GitHub updates must degrade without blocking the core workspace.
+Reusable deployment rules are tracked in `docs/功能规划/开箱即用与外部接入规划.md`. Public-version runtime files should converge under `AIstudyPublicData`; external integrations such as MySQL, Chrome ports, AI web sessions, and GitHub updates must degrade without blocking the core workspace.
 
 ## First Implementation Milestone
 

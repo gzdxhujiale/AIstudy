@@ -5,8 +5,8 @@ $projectRoot = Resolve-Path (Join-Path $scriptDir "..\..")
 $releaseRoot = Join-Path $projectRoot "release"
 $releasePrefix = (Join-Path $projectRoot "release-").ToLowerInvariant()
 $cacheRoot = Join-Path $projectRoot ".tmp\build-cache"
-$portableDataDir = Join-Path $releaseRoot "win-unpacked\AIstudyData"
-$preservedDataDir = Join-Path $projectRoot ".tmp\packaging-preserve\AIstudyData"
+$portableDataDir = Join-Path $releaseRoot "win-unpacked\AIstudyPublicData"
+$preservedDataDir = Join-Path $projectRoot ".tmp\packaging-preserve\AIstudyPublicData"
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $OutputEncoding
 try {

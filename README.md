@@ -34,6 +34,8 @@ See `docs/ARCHITECTURE.md`.
 - Every feature module needs its own `README.md` that records scope, boundaries, user flow, and extension rules.
 - The root README records only project-level rules and the main architecture direction.
 - Before building a new feature, check whether mature GitHub or open-source projects already solve the same problem. Reuse proven patterns when they fit AIstudy's storage and UI constraints.
+- Codex handoff and development takeover rules are tracked in `docs/codex/CODEX_HANDOFF.md`; update it when project location, repository, build flow, architecture boundary, or release flow changes.
+- Development-side architecture notes can be synced to the private `AIstudy 全量功能架构` knowledge base with `npm run arch:knowledge:sync`; the Codex handoff document has dedicated commands `npm run codex:handoff:sync` and `npm run codex:handoff:commit`.
 
 ## Course Storage Reliability
 
