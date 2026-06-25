@@ -46,14 +46,35 @@ export type KnowledgeDocumentSaveInput = {
   snapshot: KnowledgeDocumentSnapshot;
 };
 
-export type KnowledgeDocumentCommand = "undo" | "redo" | "bold" | "italic" | "underline" | "save";
+export type KnowledgeDocumentCommand =
+  | "undo"
+  | "redo"
+  | "bold"
+  | "italic"
+  | "underline"
+  | "strikeout"
+  | "superscript"
+  | "subscript"
+  | "pageBreak"
+  | "separator"
+  | "save";
+
+export type KnowledgeDocumentAlignment = "left" | "center" | "right" | "alignment" | "justify";
+export type KnowledgeDocumentTitleLevel = "paragraph" | "first" | "second" | "third" | "fourth" | "fifth" | "sixth";
+export type KnowledgeDocumentListType = "none" | "ul" | "ol";
 
 export type KnowledgeDocumentFormatState = {
+  fontFamily: string;
   fontSize: number;
   color: string;
+  highlight: string | null;
   bold: boolean;
   italic: boolean;
   underline: boolean;
+  strikeout: boolean;
+  alignment: KnowledgeDocumentAlignment | null;
+  titleLevel: KnowledgeDocumentTitleLevel;
+  listType: KnowledgeDocumentListType;
 };
 
 export type KnowledgeDocumentEditorHandle = {
@@ -61,10 +82,16 @@ export type KnowledgeDocumentEditorHandle = {
   getSelectedText: () => string;
   hasSelection: () => boolean;
   exec: (command: KnowledgeDocumentCommand) => void;
+  setFontFamily: (fontFamily: string) => void;
   setFontSize: (size: number) => void;
   setColor: (color: string) => void;
-  captureFormat: () => KnowledgeDocumentFormatState | null;
-  applyFormat: (format: KnowledgeDocumentFormatState) => boolean;
+  setHighlight: (color: string | null) => void;
+  setTitleLevel: (level: KnowledgeDocumentTitleLevel) => void;
+  setAlignment: (alignment: KnowledgeDocumentAlignment) => void;
+  setList: (type: KnowledgeDocumentListType) => void;
+  insertTable: (rows: number, cols: number) => void;
+  startFormatPainter: (reusable: boolean) => boolean;
+  clearFormatPainter: () => void;
   focus: () => void;
   destroy: () => void;
 };

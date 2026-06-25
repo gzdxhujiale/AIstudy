@@ -1,5 +1,30 @@
 import React from "react";
-import { Bold, Bot, ChevronLeft, ChevronRight, Italic, Paintbrush, Redo2, Save, SkipForward, Type, Underline, Undo2, Upload } from "lucide-react";
+import { createPortal } from "react-dom";
+import {
+  AlignCenter,
+  AlignJustify,
+  AlignLeft,
+  AlignRight,
+  Bold,
+  Bot,
+  ChevronLeft,
+  ChevronRight,
+  Highlighter,
+  Italic,
+  List,
+  ListOrdered,
+  Redo2,
+  Save,
+  SkipForward,
+  SlidersHorizontal,
+  Strikethrough,
+  Subscript,
+  Superscript,
+  Underline,
+  Undo2,
+  Upload,
+  X
+} from "lucide-react";
 import { createCanvasDocumentEditor, createEmptyKnowledgeDocumentSnapshot } from "./canvasEditorAdapter";
 import { AiAssistantPanel } from "../assistant/AiAssistantPanel";
 import { ImporterDialog } from "../importer/ImporterDialog";
@@ -28,7 +53,11 @@ type KnowledgeDocumentWorkspaceProps = {
   mindMapId: string | null;
   selectedNode: MindMapSelectedNode;
   outline: MindMapOutlineItem[];
+  externalChangeRevision?: number;
   onNodeSelect?: (nodeId: string) => void;
+  detailPaneMode?: "catalog" | "format";
+  onOpenFormatPane?: () => void;
+  onCloseFormatPane?: () => void;
 };
 
 type StorageMode = "mysql" | "local" | "none";
@@ -57,14 +86,42 @@ type AiPanelSize = {
 };
 
 type DocumentFormatBrushState = {
-  format: KnowledgeDocumentFormatState;
   reusable: boolean;
 };
 
+type DocumentAlignment = NonNullable<KnowledgeDocumentFormatState["alignment"]>;
+type DocumentListType = NonNullable<KnowledgeDocumentFormatState["listType"]>;
+type DocumentTitleLevel = KnowledgeDocumentFormatState["titleLevel"];
+
+function areDocumentFormatStatesEqual(left: KnowledgeDocumentFormatState, right: KnowledgeDocumentFormatState) {
+  return (
+    left.fontFamily === right.fontFamily &&
+    left.fontSize === right.fontSize &&
+    left.color === right.color &&
+    left.highlight === right.highlight &&
+    left.bold === right.bold &&
+    left.italic === right.italic &&
+    left.underline === right.underline &&
+    left.strikeout === right.strikeout &&
+    left.alignment === right.alignment &&
+    left.titleLevel === right.titleLevel &&
+    left.listType === right.listType
+  );
+}
+
 const SAVE_DEBOUNCE_MS = 900;
 const DOCUMENT_STORAGE_PREFIX = "aistudy:knowledge-document:v1:";
-const FONT_SIZE_OPTIONS = [12, 14, 16, 18, 20, 24, 28, 32];
+const FONT_FAMILY_OPTIONS = ["Microsoft YaHei", "SimSun", "SimHei", "KaiTi", "Arial", "Times New Roman"];
+const FONT_SIZE_OPTIONS = [10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48];
 const COLOR_OPTIONS = ["#1f2937", "#2563eb", "#0f766e", "#d97706", "#dc2626", "#7c3aed"];
+const HIGHLIGHT_OPTIONS = ["#fff2ac", "#dbeafe", "#dcfce7", "#fee2e2"];
+const TITLE_LEVEL_OPTIONS = [
+  { value: "paragraph", label: "正文" },
+  { value: "first", label: "标题 1" },
+  { value: "second", label: "标题 2" },
+  { value: "third", label: "标题 3" },
+  { value: "fourth", label: "标题 4" }
+] as const;
 const AI_CONTEXT_PANEL_WIDTH = 430;
 const AI_CONTEXT_PANEL_HEIGHT = 560;
 const AI_CONTEXT_PANEL_MIN_WIDTH = 360;
@@ -258,12 +315,224 @@ function getAiPanelAnchorPoint(anchor: HTMLElement | null, fallback: { x: number
   };
 }
 
+type DocumentFormatPanelProps = {
+  disabled: boolean;
+  embedded?: boolean;
+  formatState: KnowledgeDocumentFormatState;
+  formatBrush: DocumentFormatBrushState | null;
+  onClose: () => void;
+  onCommand: (command: Parameters<KnowledgeDocumentEditorHandle["exec"]>[0]) => void;
+  onFontFamily: (fontFamily: string) => void;
+  onFontSize: (fontSize: number) => void;
+  onColor: (color: string) => void;
+  onHighlight: (color: string | null) => void;
+  onTitleLevel: (level: DocumentTitleLevel) => void;
+  onAlignment: (alignment: DocumentAlignment) => void;
+  onList: (type: DocumentListType) => void;
+  onInsertTable: () => void;
+  onStartSingleUseFormatBrush: () => void;
+  onToggleReusableFormatBrush: () => void;
+};
+
+function DocumentFormatPanel({
+  disabled,
+  embedded = false,
+  formatState,
+  formatBrush,
+  onClose,
+  onCommand,
+  onFontFamily,
+  onFontSize,
+  onColor,
+  onHighlight,
+  onTitleLevel,
+  onAlignment,
+  onList,
+  onInsertTable,
+  onStartSingleUseFormatBrush,
+  onToggleReusableFormatBrush
+}: DocumentFormatPanelProps) {
+  const keepEditorSelectionOnButtonPress = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target?.closest("button")) return;
+    event.preventDefault();
+  }, []);
+
+  return (
+    <aside
+      className={embedded ? "mindmap-format-panel document-format-panel embedded" : "mindmap-format-panel document-format-panel"}
+      aria-label="排版"
+      onMouseDownCapture={keepEditorSelectionOnButtonPress}
+    >
+      {embedded ? null : (
+        <div className="mindmap-format-panel-header">
+          <strong>排版</strong>
+          <button type="button" title="关闭" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
+      <div className="mindmap-format-tabs" aria-label="文档排版">
+        <button type="button" className="active">
+          样式
+        </button>
+        <button type="button" disabled>
+          页面
+        </button>
+      </div>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">样式</div>
+        <label className="mindmap-format-field">
+          <span>段落</span>
+          <select value={formatState.titleLevel} onChange={(event) => onTitleLevel(event.target.value as DocumentTitleLevel)} disabled={disabled}>
+            {TITLE_LEVEL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mindmap-format-field">
+          <span>字体</span>
+          <select value={formatState.fontFamily} onChange={(event) => onFontFamily(event.target.value)} disabled={disabled}>
+            {FONT_FAMILY_OPTIONS.map((font) => (
+              <option key={font} value={font}>
+                {font}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="mindmap-format-field">
+          <span>字号</span>
+          <select value={formatState.fontSize} onChange={(event) => onFontSize(Number(event.target.value))} disabled={disabled}>
+            {FONT_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">文本</div>
+        <div className="document-format-button-grid" aria-label="文本样式">
+          <button type="button" title="加粗" className={formatState.bold ? "active" : ""} onClick={() => onCommand("bold")} disabled={disabled}>
+            <Bold size={15} />
+          </button>
+          <button type="button" title="斜体" className={formatState.italic ? "active" : ""} onClick={() => onCommand("italic")} disabled={disabled}>
+            <Italic size={15} />
+          </button>
+          <button type="button" title="下划线" className={formatState.underline ? "active" : ""} onClick={() => onCommand("underline")} disabled={disabled}>
+            <Underline size={15} />
+          </button>
+          <button type="button" title="删除线" className={formatState.strikeout ? "active" : ""} onClick={() => onCommand("strikeout")} disabled={disabled}>
+            <Strikethrough size={15} />
+          </button>
+          <button type="button" title="上标" onClick={() => onCommand("superscript")} disabled={disabled}>
+            <Superscript size={15} />
+          </button>
+          <button type="button" title="下标" onClick={() => onCommand("subscript")} disabled={disabled}>
+            <Subscript size={15} />
+          </button>
+        </div>
+        <div className="mindmap-format-swatches" aria-label="文字颜色">
+          {COLOR_OPTIONS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              className={formatState.color.toLowerCase() === color.toLowerCase() ? "active" : ""}
+              style={{ backgroundColor: color }}
+              title={color}
+              onClick={() => onColor(color)}
+              disabled={disabled}
+            />
+          ))}
+        </div>
+        <div className="document-highlight-panel" aria-label="高亮颜色">
+          <button type="button" title="取消高亮" onClick={() => onHighlight(null)} disabled={disabled}>
+            <Highlighter size={15} />
+          </button>
+          {HIGHLIGHT_OPTIONS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              className={formatState.highlight?.toLowerCase() === color.toLowerCase() ? "active" : ""}
+              style={{ backgroundColor: color }}
+              title={color}
+              onClick={() => onHighlight(color)}
+              disabled={disabled}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">段落</div>
+        <div className="document-format-button-grid" aria-label="段落排版">
+          <button type="button" title="左对齐" className={formatState.alignment === "left" ? "active" : ""} onClick={() => onAlignment("left")} disabled={disabled}>
+            <AlignLeft size={15} />
+          </button>
+          <button type="button" title="居中" className={formatState.alignment === "center" ? "active" : ""} onClick={() => onAlignment("center")} disabled={disabled}>
+            <AlignCenter size={15} />
+          </button>
+          <button type="button" title="右对齐" className={formatState.alignment === "right" ? "active" : ""} onClick={() => onAlignment("right")} disabled={disabled}>
+            <AlignRight size={15} />
+          </button>
+          <button type="button" title="两端对齐" className={formatState.alignment === "justify" ? "active" : ""} onClick={() => onAlignment("justify")} disabled={disabled}>
+            <AlignJustify size={15} />
+          </button>
+          <button type="button" title="项目符号" className={formatState.listType === "ul" ? "active" : ""} onClick={() => onList(formatState.listType === "ul" ? "none" : "ul")} disabled={disabled}>
+            <List size={15} />
+          </button>
+          <button type="button" title="编号列表" className={formatState.listType === "ol" ? "active" : ""} onClick={() => onList(formatState.listType === "ol" ? "none" : "ol")} disabled={disabled}>
+            <ListOrdered size={15} />
+          </button>
+        </div>
+      </section>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">插入</div>
+        <div className="mindmap-format-actions">
+          <button type="button" onClick={onInsertTable} disabled={disabled}>
+            表格
+          </button>
+          <button type="button" onClick={() => onCommand("pageBreak")} disabled={disabled}>
+            分页
+          </button>
+          <button type="button" onClick={() => onCommand("separator")} disabled={disabled}>
+            分隔线
+          </button>
+        </div>
+      </section>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">工具</div>
+        <div className="mindmap-format-actions">
+          <button type="button" className={formatBrush && !formatBrush.reusable ? "active" : ""} onClick={onStartSingleUseFormatBrush} disabled={disabled}>
+            格式刷
+          </button>
+          <button type="button" className={formatBrush?.reusable ? "active" : ""} onClick={onToggleReusableFormatBrush} disabled={disabled}>
+            连续格式刷
+          </button>
+        </div>
+      </section>
+    </aside>
+  );
+}
+
 export function KnowledgeDocumentWorkspace({
   courseId,
   mindMapId,
   selectedNode,
   outline,
-  onNodeSelect
+  externalChangeRevision = 0,
+  onNodeSelect,
+  detailPaneMode = "catalog",
+  onOpenFormatPane,
+  onCloseFormatPane
 }: KnowledgeDocumentWorkspaceProps) {
   const mountRef = React.useRef<HTMLDivElement | null>(null);
   const toolbarAiButtonRef = React.useRef<HTMLButtonElement | null>(null);
@@ -283,18 +552,26 @@ export function KnowledgeDocumentWorkspace({
   const viewportUpdateFrameRef = React.useRef<number | null>(null);
   const [snapshot, setSnapshot] = React.useState<KnowledgeDocumentSnapshot | null>(null);
   const [formatState, setFormatState] = React.useState<KnowledgeDocumentFormatState>({
+    fontFamily: "Microsoft YaHei",
     fontSize: 16,
     color: "#1f2937",
+    highlight: null,
     bold: false,
     italic: false,
-    underline: false
+    underline: false,
+    strikeout: false,
+    alignment: null,
+    titleLevel: "paragraph",
+    listType: "none"
   });
   const formatStateRef = React.useRef(formatState);
+  const isFormatPanelOpenRef = React.useRef(false);
   const formatBrushRef = React.useRef<DocumentFormatBrushState | null>(null);
   const [formatBrush, setFormatBrush] = React.useState<DocumentFormatBrushState | null>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
   const [isEditorReady, setIsEditorReady] = React.useState(false);
+  const isFormatPanelOpen = detailPaneMode === "format";
   const [storageMode, setStorageMode] = React.useState<StorageMode>("none");
   const [savedAt, setSavedAt] = React.useState<string | null>(null);
   const [error, setError] = React.useState("");
@@ -313,6 +590,7 @@ export function KnowledgeDocumentWorkspace({
     [courseId, mindMapId, selectedNode.id]
   );
   const canUseDocument = Boolean(documentBinding && snapshot);
+  isFormatPanelOpenRef.current = isFormatPanelOpen;
   const navigationItems = React.useMemo(() => flattenOutlineItems(outline), [outline]);
   const documentKey = React.useMemo(
     () => (documentBinding ? `${documentBinding.courseId}:${documentBinding.mindMapId}:${documentBinding.nodeId}` : "none"),
@@ -332,7 +610,9 @@ export function KnowledgeDocumentWorkspace({
     Boolean(onNodeSelect);
 
   const updateFormatState = React.useCallback((nextState: KnowledgeDocumentFormatState) => {
+    if (areDocumentFormatStatesEqual(formatStateRef.current, nextState)) return;
     formatStateRef.current = nextState;
+    if (!isFormatPanelOpenRef.current) return;
     setFormatState(nextState);
   }, []);
 
@@ -341,46 +621,6 @@ export function KnowledgeDocumentWorkspace({
     setFormatBrush(nextBrush);
   }, []);
 
-  const preserveDocumentScroll = React.useCallback((action: () => void) => {
-    const mount = mountRef.current;
-    const scrollLeft = mount?.scrollLeft ?? 0;
-    const scrollTop = mount?.scrollTop ?? 0;
-    action();
-    if (!mount) return;
-
-    const restore = () => {
-      mount.scrollLeft = scrollLeft;
-      mount.scrollTop = scrollTop;
-      const nextState = readNativeScrollState(mount);
-      setDocumentViewportState((previousState) =>
-        areViewportScrollStatesEqual(previousState, nextState) ? previousState : nextState
-      );
-    };
-    restore();
-    window.requestAnimationFrame(restore);
-    window.setTimeout(restore, 0);
-  }, []);
-
-  const applyFormatBrushToSelection = React.useCallback((brush: DocumentFormatBrushState) => {
-    const editor = editorRef.current;
-    if (!editor?.hasSelection()) {
-      setError(brush.reusable ? "连续格式刷已取样，请先框选要套用格式的文字" : "单次格式刷已取样，请先框选要套用格式的文字");
-      return false;
-    }
-
-    let applied = false;
-    preserveDocumentScroll(() => {
-      applied = editor.applyFormat(brush.format);
-    });
-    if (!applied) {
-      setError(brush.reusable ? "连续格式刷已取样，请重新框选要套用格式的文字" : "单次格式刷已取样，请重新框选要套用格式的文字");
-      return false;
-    }
-
-    setError("");
-    return true;
-  }, [preserveDocumentScroll]);
-
   const runFormatBrush = React.useCallback(
     (reusable: boolean) => {
       const editor = editorRef.current;
@@ -388,40 +628,26 @@ export function KnowledgeDocumentWorkspace({
 
       const activeBrush = formatBrushRef.current;
       const isSameBrush = Boolean(activeBrush && activeBrush.reusable === reusable);
-      const hasSelection = editor.hasSelection();
 
       if (isSameBrush && activeBrush) {
-        if (!hasSelection) {
-          setActiveFormatBrush(null);
-          setError("");
-          return;
-        }
-
-        const applied = applyFormatBrushToSelection(activeBrush);
-        if (applied && !activeBrush.reusable) {
-          setActiveFormatBrush(null);
-        }
+        editor.clearFormatPainter();
+        setActiveFormatBrush(null);
+        setError("");
         return;
       }
 
-      if (!hasSelection) {
+      const started = editor.startFormatPainter(reusable);
+      if (!started) {
         setError(reusable ? "请先框选要复制格式的文字，再点击连续格式刷取样" : "请先框选要复制格式的文字，再点击单次格式刷取样");
         return;
       }
 
-      const capturedFormat = editor.captureFormat();
-      if (!capturedFormat) {
-        setError("未读取到选区格式，请重新框选源文字");
-        return;
-      }
-
       setActiveFormatBrush({
-        format: capturedFormat,
         reusable
       });
       setError("");
     },
-    [applyFormatBrushToSelection, canUseDocument, isEditorReady, setActiveFormatBrush]
+    [canUseDocument, isEditorReady, setActiveFormatBrush]
   );
 
   const startSingleUseFormatBrush = React.useCallback(() => {
@@ -432,11 +658,21 @@ export function KnowledgeDocumentWorkspace({
     runFormatBrush(true);
   }, [runFormatBrush]);
 
+  const finishSingleUseFormatBrushAfterSelection = React.useCallback(() => {
+    const activeBrush = formatBrushRef.current;
+    if (!activeBrush || activeBrush.reusable) return;
+
+    window.requestAnimationFrame(() => {
+      setActiveFormatBrush(null);
+    });
+  }, [setActiveFormatBrush]);
+
   const handleEditorKeyDownCapture = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       if (event.key !== "Escape" || !formatBrushRef.current) return;
       event.preventDefault();
       event.stopPropagation();
+      editorRef.current?.clearFormatPainter();
       setActiveFormatBrush(null);
     },
     [setActiveFormatBrush]
@@ -729,7 +965,7 @@ export function KnowledgeDocumentWorkspace({
         }
       }
     })();
-  }, [commitDocumentViewportState, documentBinding, flushPendingSave, resetDocumentViewportToStart, upsertDocumentStatus]);
+  }, [commitDocumentViewportState, documentBinding, externalChangeRevision, flushPendingSave, resetDocumentViewportToStart, upsertDocumentStatus]);
 
   React.useEffect(() => {
     const mount = mountRef.current;
@@ -737,7 +973,25 @@ export function KnowledgeDocumentWorkspace({
     let isDisposed = false;
     let isCreating = false;
     let frameId: number | null = null;
+    let mountedWidth = 0;
+    let pendingSnapshot = latestSnapshotRef.current ?? snapshot;
     const editorDocumentKey = documentKey;
+
+    const destroyMountedEditor = () => {
+      const currentEditor = editorRef.current;
+      if (currentEditor) {
+        try {
+          pendingSnapshot = currentEditor.getSnapshot();
+          latestSnapshotRef.current = pendingSnapshot;
+        } catch {
+          pendingSnapshot = latestSnapshotRef.current ?? snapshot;
+        }
+        currentEditor.destroy();
+        editorRef.current = null;
+      }
+      setIsEditorReady(false);
+      mount.replaceChildren();
+    };
 
     const createEditor = () => {
       if (isDisposed || isCreating || editorRef.current) return;
@@ -766,8 +1020,9 @@ export function KnowledgeDocumentWorkspace({
         editorSurface.className = "document-editor-surface";
         editorSurface.dataset.documentKey = editorDocumentKey;
         mount.appendChild(editorSurface);
-        createCanvasDocumentEditor(editorSurface, snapshot, {
+        createCanvasDocumentEditor(editorSurface, pendingSnapshot, {
           onSnapshotChanged: (nextSnapshot) => {
+            pendingSnapshot = nextSnapshot;
             queueSnapshotSave(nextSnapshot);
             scheduleDocumentViewportStateUpdate();
           },
@@ -799,6 +1054,7 @@ export function KnowledgeDocumentWorkspace({
               return;
             }
             editorRef.current = editor;
+            mountedWidth = nextRect.width;
             setIsEditorReady(true);
             window.requestAnimationFrame(() => {
               if (isDisposed) return;
@@ -821,11 +1077,18 @@ export function KnowledgeDocumentWorkspace({
       });
     };
 
-    editorRef.current?.destroy();
-    editorRef.current = null;
-    setIsEditorReady(false);
-    mount.replaceChildren();
-    const resizeObserver = new ResizeObserver(createEditor);
+    destroyMountedEditor();
+    const resizeObserver = new ResizeObserver(() => {
+      const rect = mount.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      if (!editorRef.current) {
+        createEditor();
+        return;
+      }
+      if (Math.abs(rect.width - mountedWidth) < 32) return;
+      destroyMountedEditor();
+      createEditor();
+    });
     resizeObserver.observe(mount);
     createEditor();
 
@@ -836,10 +1099,7 @@ export function KnowledgeDocumentWorkspace({
         frameId = null;
       }
       resizeObserver.disconnect();
-      editorRef.current?.destroy();
-      editorRef.current = null;
-      setIsEditorReady(false);
-      mount.replaceChildren();
+      destroyMountedEditor();
     };
   }, [canUseDocument, documentKey, queueSnapshotSave, resetDocumentViewportToStart, scheduleDocumentViewportStateUpdate, snapshot, updateFormatState]);
 
@@ -1138,94 +1398,34 @@ export function KnowledgeDocumentWorkspace({
     };
   }, []);
 
+  const formatPanelSlot = isFormatPanelOpen && typeof document !== "undefined"
+    ? document.getElementById("document-format-panel-slot")
+    : null;
+
   return (
     <div className="document-workspace">
       <div className="document-local-toolbar" aria-label="文档编辑工具栏">
-        <button type="button" title="撤销" onClick={() => editorRef.current?.exec("undo")} disabled={!canUseDocument}>
-          <Undo2 size={15} />
-        </button>
-        <button type="button" title="重做" onClick={() => editorRef.current?.exec("redo")} disabled={!canUseDocument}>
-          <Redo2 size={15} />
-        </button>
-        <span className="mindmap-toolbar-separator" />
-        <button
-          type="button"
-          title="加粗"
-          className={formatState.bold ? "format-button active" : "format-button"}
-          onClick={() => editorRef.current?.exec("bold")}
-          disabled={!canUseDocument}
-        >
-          <Bold size={15} />
-        </button>
-        <button
-          type="button"
-          title="斜体"
-          className={formatState.italic ? "format-button active" : "format-button"}
-          onClick={() => editorRef.current?.exec("italic")}
-          disabled={!canUseDocument}
-        >
-          <Italic size={15} />
-        </button>
-        <button
-          type="button"
-          title="下划线"
-          className={formatState.underline ? "format-button active" : "format-button"}
-          onClick={() => editorRef.current?.exec("underline")}
-          disabled={!canUseDocument}
-        >
-          <Underline size={15} />
-        </button>
-        <span className="mindmap-toolbar-separator" />
-        <label className="document-size-control" title="字号">
-          <Type size={15} />
-          <select
-            value={formatState.fontSize}
-            onChange={(event) => editorRef.current?.setFontSize(Number(event.target.value))}
-            disabled={!canUseDocument}
-          >
-            {FONT_SIZE_OPTIONS.map((size) => (
-              <option key={size} value={size}>
-                {size}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="document-color-swatches" aria-label="文字颜色">
-          {COLOR_OPTIONS.map((color) => (
-            <button
-              key={color}
-              type="button"
-              className={formatState.color.toLowerCase() === color.toLowerCase() ? "document-color-swatch active" : "document-color-swatch"}
-              style={{ backgroundColor: color }}
-              title={color}
-              aria-label={`文字颜色 ${color}`}
-              onClick={() => editorRef.current?.setColor(color)}
-              disabled={!canUseDocument}
-            />
-          ))}
+        <div className="document-toolbar-group">
+          <button type="button" title="撤销" onClick={() => editorRef.current?.exec("undo")} disabled={!canUseDocument}>
+            <Undo2 size={15} />
+          </button>
+          <button type="button" title="重做" onClick={() => editorRef.current?.exec("redo")} disabled={!canUseDocument}>
+            <Redo2 size={15} />
+          </button>
         </div>
         <button
           type="button"
-          title={formatBrush && !formatBrush.reusable ? "单次格式刷已取样：框选目标文字后再次点击应用" : "单次格式刷：框选源文字后点击取样"}
-          className={formatBrush && !formatBrush.reusable ? "format-button document-format-brush-button active" : "format-button document-format-brush-button"}
-          aria-pressed={Boolean(formatBrush && !formatBrush.reusable)}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={startSingleUseFormatBrush}
-          disabled={!canUseDocument || !isEditorReady}
+          title="排版"
+          className={isFormatPanelOpen ? "document-format-panel-button active" : "document-format-panel-button"}
+          aria-pressed={isFormatPanelOpen}
+          onClick={() => {
+            setFormatState(formatStateRef.current);
+            onOpenFormatPane?.();
+          }}
+          disabled={!canUseDocument}
         >
-          <Paintbrush size={15} />
-        </button>
-        <button
-          type="button"
-          title={formatBrush?.reusable ? "连续格式刷已取样：框选目标文字后再次点击应用；无选区点击关闭" : "连续格式刷：框选源文字后点击取样"}
-          className={formatBrush?.reusable ? "format-button document-format-brush-button active" : "format-button document-format-brush-button"}
-          aria-pressed={Boolean(formatBrush?.reusable)}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={toggleReusableFormatBrush}
-          disabled={!canUseDocument || !isEditorReady}
-        >
-          <Paintbrush size={15} />
-          <span className="document-format-brush-infinity">∞</span>
+          <SlidersHorizontal size={15} />
+          <span>排版</span>
         </button>
         <span className="mindmap-toolbar-spacer" />
         <div className="document-page-navigation" aria-label="文档翻页">
@@ -1287,10 +1487,33 @@ export function KnowledgeDocumentWorkspace({
         </button>
       </div>
 
+      {formatPanelSlot ? createPortal(
+        <DocumentFormatPanel
+          disabled={!canUseDocument || !isEditorReady}
+          embedded
+          formatState={formatState}
+          formatBrush={formatBrush}
+          onClose={() => onCloseFormatPane?.()}
+          onCommand={(command) => editorRef.current?.exec(command)}
+          onFontFamily={(fontFamily) => editorRef.current?.setFontFamily(fontFamily)}
+          onFontSize={(fontSize) => editorRef.current?.setFontSize(fontSize)}
+          onColor={(color) => editorRef.current?.setColor(color)}
+          onHighlight={(color) => editorRef.current?.setHighlight(color)}
+          onTitleLevel={(level) => editorRef.current?.setTitleLevel(level)}
+          onAlignment={(alignment) => editorRef.current?.setAlignment(alignment)}
+          onList={(type) => editorRef.current?.setList(type)}
+          onInsertTable={() => editorRef.current?.insertTable(3, 3)}
+          onStartSingleUseFormatBrush={startSingleUseFormatBrush}
+          onToggleReusableFormatBrush={toggleReusableFormatBrush}
+        />,
+        formatPanelSlot
+      ) : null}
+
       <div
         className={formatBrush ? "document-editor-shell is-format-brush" : "document-editor-shell"}
         onContextMenu={rememberContextMenuPoint}
         onKeyDownCapture={handleEditorKeyDownCapture}
+        onPointerUpCapture={finishSingleUseFormatBrushAfterSelection}
       >
         <div ref={mountRef} className="document-editor-host" aria-hidden={!canUseDocument} />
         <ViewportScrollbars

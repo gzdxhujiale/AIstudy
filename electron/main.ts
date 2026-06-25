@@ -1,15 +1,18 @@
 import { app, BrowserWindow, clipboard, ipcMain, net, shell, type IpcMainInvokeEvent } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import mysql, { type Connection, type Pool, type PoolConnection, type RowDataPacket } from "mysql2/promise";
 import { Socket } from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import WebSocket from "ws";
 import { AISTUDY_CORE_CONTRACT } from "./coreContract.js";
 import { classifyAppError, createAppError, getAppErrorDefinition } from "./appErrors.js";
+import { createMcpController } from "./mcp/controller.js";
+import { createMcpRemoteAccessController } from "./mcp/remoteAccess.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -21,6 +24,29 @@ const INLINE_DATA_URL_PATTERN = /^data:[^;,]+(?:;[^,]+)*;base64,/i;
 const UPDATE_DOWNLOAD_CHUNK_SIZE_BYTES = 4 * 1024 * 1024;
 const UPDATE_DOWNLOAD_RETRY_LIMIT = 4;
 const UPDATE_DOWNLOAD_NET_TIMEOUT_MS = 120000;
+
+function resolveAistudyUserDataRoot() {
+  const configuredRoot = process.env.AISTUDY_PUBLIC_USER_DATA_ROOT?.trim() || process.env.AISTUDY_USER_DATA_ROOT?.trim();
+  if (configuredRoot) return configuredRoot;
+  if (isDev) return path.join(app.getAppPath(), ".runtime", "user-data");
+
+  const exeDir = path.dirname(app.getPath("exe"));
+  const exeDirRoot = path.parse(exeDir).root;
+  if (exeDirRoot && !exeDirRoot.toLowerCase().startsWith("c:")) {
+    return path.join(exeDir, "AIstudyUserData");
+  }
+
+  const fDriveRoot = "F:\\";
+  if (existsSync(fDriveRoot)) {
+    return path.join(fDriveRoot, "AIstudyPublicData", "user-data");
+  }
+
+  return path.join(app.getAppPath(), ".runtime", "user-data");
+}
+
+const aistudyUserDataRoot = resolveAistudyUserDataRoot();
+mkdirSync(aistudyUserDataRoot, { recursive: true });
+app.setPath("userData", aistudyUserDataRoot);
 
 type CourseRecord = {
   id: string;
@@ -358,6 +384,17 @@ type MysqlSchemaRow = RowDataPacket & {
   INDEX_NAME?: string;
 };
 
+type McpNodeSearchRow = RowDataPacket & {
+  courseId: string;
+  courseName?: string;
+  mindMapId: string;
+  nodeId: string;
+  title: string;
+  pathText: string | null;
+  depth: number | string;
+  updatedAt: Date | string;
+};
+
 type MindMapProjectionNode = {
   nodeId: string;
   parentNodeId: string | null;
@@ -457,7 +494,12 @@ type RuntimeDiagnosticResult = {
   items: RuntimeDiagnosticItem[];
 };
 
-type ChromePortPlatformId = "doubao" | "chatgpt";
+type RuntimeDiagnosticReportCopyResult = {
+  copied: boolean;
+  diagnostic: RuntimeDiagnosticResult;
+};
+
+type ChromePortPlatformId = "doubao" | "chatgpt" | "bilibili" | "zhihu";
 
 type ChromePortDefinition = {
   id: ChromePortPlatformId;
@@ -486,6 +528,7 @@ type ChromePortStatus = ChromePortDefinition & {
 type ChromePortOpenResult = {
   status: ChromePortStatus;
   message: string;
+  openedUrl?: string;
 };
 
 type ChromeDebugTarget = {
@@ -500,6 +543,11 @@ type ChromeCookie = {
   name?: string;
   domain?: string;
   value?: string;
+  path?: string;
+  expires?: number;
+  expirationDate?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
 };
 
 type ChromePortSavedEntry = {
@@ -540,6 +588,79 @@ type AiChatResult = {
   error?: string;
 };
 
+type InformationToolStatus = {
+  id: "yt-dlp" | "ffmpeg" | "whisper";
+  name: string;
+  available: boolean;
+  version: string;
+  message: string;
+};
+
+type InformationBilibiliCollectRequest = {
+  upName?: string;
+  bvid?: string;
+  mid?: string | number;
+  pageSize?: number;
+};
+
+type InformationBilibiliUp = {
+  mid: number;
+  name: string;
+  face: string;
+  spaceUrl: string;
+};
+
+type InformationBilibiliVideo = {
+  bvid: string;
+  aid: number;
+  cid: number;
+  title: string;
+  url: string;
+  author: string;
+  mid: number;
+  publishedAt: string;
+  durationSeconds: number;
+  description: string;
+  coverUrl: string;
+  stats: {
+    view: number;
+    like: number;
+    favorite: number;
+    coin: number;
+    reply: number;
+    share: number;
+  };
+  transcript: {
+    status: "available" | "missing" | "blocked";
+    text: string;
+    message: string;
+  };
+};
+
+type InformationBilibiliCollectResult = {
+  status: "ready" | "partial" | "blocked";
+  message: string;
+  up: InformationBilibiliUp | null;
+  videos: InformationBilibiliVideo[];
+  blockers: string[];
+  collectedAt: string;
+};
+
+type InformationProcessStep = {
+  id: "metadata" | "subtitle" | "official-text" | "download" | "transcribe";
+  name: string;
+  status: "pending" | "running" | "done" | "blocked" | "skipped";
+  message: string;
+};
+
+type InformationBilibiliProcessResult = {
+  status: "ready" | "blocked";
+  message: string;
+  video: InformationBilibiliVideo | null;
+  steps: InformationProcessStep[];
+  workDir: string;
+};
+
 let mainWindow: BrowserWindow | null = null;
 let mysqlRuntime: MysqlRuntime | null = null;
 let mysqlRuntimePromise: Promise<MysqlRuntime> | null = null;
@@ -564,6 +685,26 @@ const chromePortDefinitions: ChromePortDefinition[] = [
     authCookieDomains: ["chatgpt.com", "openai.com"],
     authCookieNames: ["__Secure-next-auth.session-token", "__Secure-authjs.session-token"],
     authDomKeywords: []
+  },
+  {
+    id: "bilibili",
+    name: "Bilibili",
+    port: 9231,
+    loginUrl: "https://www.bilibili.com/",
+    hostKeyword: "bilibili.com",
+    authCookieDomains: ["bilibili.com"],
+    authCookieNames: ["SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5"],
+    authDomKeywords: ["动态", "投稿", "消息"]
+  },
+  {
+    id: "zhihu",
+    name: "知乎",
+    port: 9232,
+    loginUrl: "https://www.zhihu.com/",
+    hostKeyword: "zhihu.com",
+    authCookieDomains: ["zhihu.com"],
+    authCookieNames: ["z_c0", "q_c1"],
+    authDomKeywords: ["创作中心", "私信", "消息"]
   }
 ];
 
@@ -592,6 +733,29 @@ function getEventWindow(event: IpcMainInvokeEvent) {
 
 function getChromePortDefinition(platformId: unknown) {
   return chromePortDefinitions.find((platform) => platform.id === platformId);
+}
+
+function getRequiredChromePortDefinition(platformId: unknown) {
+  const platform = getChromePortDefinition(platformId);
+  if (!platform) {
+    throw new Error("未知的 Chrome 端口平台");
+  }
+  return platform;
+}
+
+function normalizeChromePortOpenUrl(platform: ChromePortDefinition, value: unknown) {
+  const rawUrl = typeof value === "string" ? value.trim() : "";
+  if (!rawUrl) return platform.loginUrl;
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+  try {
+    const url = new URL(withProtocol);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("Chrome 端口只能打开网页地址");
+    }
+    return url.toString();
+  } catch {
+    throw new Error("Chrome 页面地址无效");
+  }
 }
 
 function getAistudyDataRoot() {
@@ -767,21 +931,16 @@ function findPlatformTarget(platform: ChromePortDefinition, targets: ChromeDebug
 
 function cdpStringifyData(value: unknown) {
   if (typeof value === "string") return value;
+  if (Buffer.isBuffer(value)) return value.toString("utf8");
   if (value instanceof ArrayBuffer) return Buffer.from(value).toString("utf8");
-  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer).toString("utf8");
+  if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("utf8");
   return "";
 }
 
 function sendChromeCdpCommand(wsUrl: string, method: string, params: Record<string, unknown> = {}, timeoutMs = 2200) {
   return new Promise<Record<string, unknown> | null>((resolve) => {
-    const WebSocketCtor = globalThis.WebSocket;
-    if (!WebSocketCtor) {
-      resolve(null);
-      return;
-    }
-
     const commandId = 1;
-    const socket = new WebSocketCtor(wsUrl);
+    const socket = new WebSocket(wsUrl);
     const timeout = setTimeout(() => {
       try {
         socket.close();
@@ -801,13 +960,13 @@ function sendChromeCdpCommand(wsUrl: string, method: string, params: Record<stri
       resolve(value);
     };
 
-    socket.addEventListener("open", () => {
+    socket.on("open", () => {
       socket.send(JSON.stringify({ id: commandId, method, params }));
     });
-    socket.addEventListener("error", () => finish(null));
-    socket.addEventListener("message", (event) => {
+    socket.on("error", () => finish(null));
+    socket.on("message", (data) => {
       try {
-        const message = JSON.parse(cdpStringifyData(event.data)) as { id?: number; result?: Record<string, unknown> };
+        const message = JSON.parse(cdpStringifyData(data)) as { id?: number; result?: Record<string, unknown> };
         if (message.id === commandId) {
           finish(message.result ?? null);
         }
@@ -830,6 +989,741 @@ async function readChromePageText(target: ChromeDebugTarget) {
   const result = await sendChromeCdpCommand(target.webSocketDebuggerUrl, "Runtime.evaluate", { expression, returnByValue: true });
   const remoteObject = result?.result as { value?: unknown } | undefined;
   return typeof remoteObject?.value === "string" ? remoteObject.value : "";
+}
+
+function stripHtmlText(value: unknown) {
+  return (typeof value === "string" ? value : "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
+}
+
+function normalizeBilibiliBvid(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  const match = text.match(/BV[0-9A-Za-z]{8,16}/);
+  return match?.[0] ?? "";
+}
+
+function normalizePositiveNumber(value: unknown, fallback = 0) {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function normalizeBilibiliTimestamp(value: unknown) {
+  const seconds = normalizePositiveNumber(value, 0);
+  if (!seconds) return "";
+  return new Date(seconds * 1000).toISOString();
+}
+
+function normalizeBilibiliUrl(value: string) {
+  if (!value) return "";
+  if (value.startsWith("//")) return `https:${value}`;
+  if (/^https?:\/\//i.test(value)) return value;
+  return value;
+}
+
+function readNestedRecord(value: unknown, key: string) {
+  if (!value || typeof value !== "object") return null;
+  const next = (value as Record<string, unknown>)[key];
+  return next && typeof next === "object" ? next as Record<string, unknown> : null;
+}
+
+function buildBilibiliCookieHeader(cookies: ChromeCookie[]) {
+  return cookies
+    .filter((cookie) => cookie.domain?.includes("bilibili.com") && cookie.name && cookie.value)
+    .map((cookie) => `${cookie.name}=${cookie.value}`)
+    .join("; ");
+}
+
+async function getBilibiliCookieHeader() {
+  const platform = getRequiredChromePortDefinition("bilibili");
+  if (!(await canConnectToLocalPort(platform.port, 500))) return "";
+  const targets = await readChromeDebugTargets(platform.port);
+  const target = findPlatformTarget(platform, targets);
+  if (!target) return "";
+  return buildBilibiliCookieHeader(await readChromeCookies(target));
+}
+
+async function getBilibiliCookies() {
+  const platform = getRequiredChromePortDefinition("bilibili");
+  if (!(await canConnectToLocalPort(platform.port, 500))) return [];
+  const targets = await readChromeDebugTargets(platform.port);
+  const target = findPlatformTarget(platform, targets);
+  if (!target) return [];
+  return (await readChromeCookies(target)).filter((cookie) => cookie.domain?.includes("bilibili.com") && cookie.name && cookie.value);
+}
+
+function toNetscapeCookieLine(cookie: ChromeCookie) {
+  const domain = cookie.domain || ".bilibili.com";
+  const includeSubdomains = domain.startsWith(".") ? "TRUE" : "FALSE";
+  const pathValue = cookie.path || "/";
+  const secure = cookie.secure ? "TRUE" : "FALSE";
+  const expires = Math.max(0, Math.floor(Number(cookie.expires ?? cookie.expirationDate ?? 0)));
+  return [domain, includeSubdomains, pathValue, secure, String(expires), cookie.name ?? "", cookie.value ?? ""].join("\t");
+}
+
+async function writeBilibiliCookiesFile(workDir: string) {
+  const cookies = await getBilibiliCookies();
+  if (cookies.length === 0) return "";
+  const cookiePath = path.join(workDir, "bilibili-cookies.txt");
+  const lines = [
+    "# Netscape HTTP Cookie File",
+    "# Generated by AIstudy information collection.",
+    ...cookies.map(toNetscapeCookieLine)
+  ];
+  await fs.writeFile(cookiePath, `${lines.join("\n")}\n`, "utf8");
+  return cookiePath;
+}
+
+async function fetchBilibiliJson<T>(url: string, referer: string, cookieHeader = "", timeoutMs = 10000): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+        "accept": "application/json,text/plain,*/*",
+        "referer": referer,
+        ...(cookieHeader ? { "cookie": cookieHeader } : {})
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`B站返回 ${response.status}`);
+    }
+    return await response.json() as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function normalizeBilibiliVideoFromView(data: Record<string, unknown>): InformationBilibiliVideo {
+  const owner = readNestedRecord(data, "owner") ?? {};
+  const stat = readNestedRecord(data, "stat") ?? {};
+  const bvid = getNonEmptyString(data.bvid);
+  return {
+    bvid,
+    aid: normalizePositiveNumber(data.aid, 0),
+    cid: normalizePositiveNumber(data.cid, 0),
+    title: getNonEmptyString(data.title, "未命名视频"),
+    url: `https://www.bilibili.com/video/${bvid}/`,
+    author: getNonEmptyString(owner.name, "未知 UP"),
+    mid: normalizePositiveNumber(owner.mid, 0),
+    publishedAt: normalizeBilibiliTimestamp(data.pubdate),
+    durationSeconds: normalizePositiveNumber(data.duration, 0),
+    description: getNonEmptyString(data.desc, ""),
+    coverUrl: normalizeBilibiliUrl(getNonEmptyString(data.pic, "")),
+    stats: {
+      view: normalizePositiveNumber(stat.view, 0),
+      like: normalizePositiveNumber(stat.like, 0),
+      favorite: normalizePositiveNumber(stat.favorite, 0),
+      coin: normalizePositiveNumber(stat.coin, 0),
+      reply: normalizePositiveNumber(stat.reply, 0),
+      share: normalizePositiveNumber(stat.share, 0)
+    },
+    transcript: {
+      status: "missing",
+      text: "",
+      message: "该视频没有检测到公开字幕，需要下载音频后转录。"
+    }
+  };
+}
+
+function normalizeBilibiliVideoFromSpace(item: Record<string, unknown>, up: InformationBilibiliUp): InformationBilibiliVideo {
+  const bvid = getNonEmptyString(item.bvid);
+  return {
+    bvid,
+    aid: normalizePositiveNumber(item.aid, 0),
+    cid: 0,
+    title: stripHtmlText(item.title) || "未命名视频",
+    url: `https://www.bilibili.com/video/${bvid}/`,
+    author: up.name,
+    mid: up.mid,
+    publishedAt: normalizeBilibiliTimestamp(item.created),
+    durationSeconds: 0,
+    description: getNonEmptyString(item.description, ""),
+    coverUrl: normalizeBilibiliUrl(getNonEmptyString(item.pic, "")),
+    stats: {
+      view: normalizePositiveNumber(item.play, 0),
+      like: 0,
+      favorite: 0,
+      coin: 0,
+      reply: normalizePositiveNumber(item.comment, 0),
+      share: 0
+    },
+    transcript: {
+      status: "missing",
+      text: "",
+      message: "列表记录未包含字幕，需要选择视频后再检测。"
+    }
+  };
+}
+
+async function fetchBilibiliVideoTranscript(video: InformationBilibiliVideo, cookieHeader: string) {
+  if (!video.cid) return video;
+  try {
+    const playerUrl = `https://api.bilibili.com/x/player/v2?bvid=${encodeURIComponent(video.bvid)}&cid=${video.cid}`;
+    const player = await fetchBilibiliJson<Record<string, unknown>>(playerUrl, video.url, cookieHeader);
+    const data = readNestedRecord(player, "data");
+    const subtitle = data ? readNestedRecord(data, "subtitle") : null;
+    const subtitles = Array.isArray(subtitle?.subtitles) ? subtitle.subtitles : [];
+    const firstSubtitle = subtitles.find((item) => item && typeof item === "object") as Record<string, unknown> | undefined;
+    const rawSubtitleUrl = getNonEmptyString(firstSubtitle?.subtitle_url, "");
+    if (!rawSubtitleUrl) return video;
+    const subtitleUrl = normalizeBilibiliUrl(rawSubtitleUrl);
+    const subtitleJson = await fetchBilibiliJson<Record<string, unknown>>(subtitleUrl, video.url, cookieHeader);
+    const body = Array.isArray(subtitleJson.body) ? subtitleJson.body : [];
+    const text = body
+      .map((item) => (item && typeof item === "object" ? getNonEmptyString((item as Record<string, unknown>).content, "") : ""))
+      .filter(Boolean)
+      .join("\n");
+    if (!text.trim()) return video;
+    return {
+      ...video,
+      transcript: {
+        status: "available" as const,
+        text,
+        message: "已读取公开字幕。"
+      }
+    };
+  } catch {
+    return {
+      ...video,
+      transcript: {
+        status: "blocked" as const,
+        text: "",
+        message: "字幕检测没有完成，需要稍后重试或走音频转录。"
+      }
+    };
+  }
+}
+
+async function resolveBilibiliUpByName(upName: string, cookieHeader: string): Promise<InformationBilibiliUp | null> {
+  const keyword = upName.trim();
+  if (!keyword) return null;
+  const searchUrl = `https://api.bilibili.com/x/web-interface/search/type?search_type=bili_user&keyword=${encodeURIComponent(keyword)}`;
+  const result = await fetchBilibiliJson<Record<string, unknown>>(searchUrl, "https://search.bilibili.com/", cookieHeader);
+  if (normalizePositiveNumber(result.code, -1) !== 0) return null;
+  const data = readNestedRecord(result, "data");
+  const users = Array.isArray(data?.result) ? data.result : [];
+  const exact = users.find((item) => {
+    if (!item || typeof item !== "object") return false;
+    return stripHtmlText((item as Record<string, unknown>).uname) === keyword;
+  }) ?? users[0];
+  if (!exact || typeof exact !== "object") return null;
+  const record = exact as Record<string, unknown>;
+  const mid = normalizePositiveNumber(record.mid, 0);
+  if (!mid) return null;
+  const name = stripHtmlText(record.uname) || keyword;
+  return {
+    mid,
+    name,
+    face: normalizeBilibiliUrl(getNonEmptyString(record.upic, "")),
+    spaceUrl: `https://space.bilibili.com/${mid}/video`
+  };
+}
+
+async function fetchBilibiliVideoByBvid(bvid: string, cookieHeader: string): Promise<InformationBilibiliVideo> {
+  const url = `https://api.bilibili.com/x/web-interface/view?bvid=${encodeURIComponent(bvid)}`;
+  const result = await fetchBilibiliJson<Record<string, unknown>>(url, `https://www.bilibili.com/video/${bvid}/`, cookieHeader);
+  if (normalizePositiveNumber(result.code, -1) !== 0) {
+    throw new Error(getNonEmptyString(result.message, "视频信息没有读取到"));
+  }
+  const data = readNestedRecord(result, "data");
+  if (!data) throw new Error("视频信息没有读取到");
+  return fetchBilibiliVideoTranscript(normalizeBilibiliVideoFromView(data), cookieHeader);
+}
+
+async function fetchBilibiliUpVideos(up: InformationBilibiliUp, cookieHeader: string, pageSize: number) {
+  const url = `https://api.bilibili.com/x/space/arc/search?mid=${up.mid}&ps=${pageSize}&pn=1&order=pubdate`;
+  const result = await fetchBilibiliJson<Record<string, unknown>>(url, up.spaceUrl, cookieHeader);
+  const code = normalizePositiveNumber(result.code, -1);
+  if (code !== 0) {
+    throw new Error(getNonEmptyString(result.message, "UP 视频列表暂时没有读取到"));
+  }
+  const data = readNestedRecord(result, "data");
+  const list = data ? readNestedRecord(data, "list") : null;
+  const vlist = Array.isArray(list?.vlist) ? list.vlist : [];
+  return vlist
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => normalizeBilibiliVideoFromSpace(item, up));
+}
+
+async function collectBilibiliInformation(input: unknown): Promise<InformationBilibiliCollectResult> {
+  const request = input && typeof input === "object" ? input as InformationBilibiliCollectRequest : {};
+  const upName = typeof request.upName === "string" ? request.upName.trim().slice(0, 80) : "";
+  const requestedBvid = normalizeBilibiliBvid(request.bvid);
+  const requestedMid = normalizePositiveNumber(request.mid, 0);
+  const pageSize = Math.min(50, Math.max(5, normalizePositiveNumber(request.pageSize, 20)));
+  const blockers: string[] = [];
+  const cookieHeader = await getBilibiliCookieHeader();
+  let up: InformationBilibiliUp | null = requestedMid
+    ? { mid: requestedMid, name: upName || `UID ${requestedMid}`, face: "", spaceUrl: `https://space.bilibili.com/${requestedMid}/video` }
+    : null;
+  let selectedVideo: InformationBilibiliVideo | null = null;
+  let videos: InformationBilibiliVideo[] = [];
+
+  if (requestedBvid) {
+    try {
+      selectedVideo = await fetchBilibiliVideoByBvid(requestedBvid, cookieHeader);
+      up = {
+        mid: selectedVideo.mid,
+        name: selectedVideo.author,
+        face: "",
+        spaceUrl: `https://space.bilibili.com/${selectedVideo.mid}/video`
+      };
+    } catch (error) {
+      blockers.push(error instanceof Error ? error.message : "指定视频没有读取到。");
+    }
+  }
+
+  if (!up && upName) {
+    try {
+      up = await resolveBilibiliUpByName(upName, cookieHeader);
+      if (!up) blockers.push("没有确认到这个 UP 主，可以先打开 B站端口完成登录后再试。");
+    } catch {
+      blockers.push("UP 主搜索受到 B站访问限制，可以先打开 B站端口完成登录后再试。");
+    }
+  }
+
+  if (up) {
+    try {
+      videos = await fetchBilibiliUpVideos(up, cookieHeader, pageSize);
+    } catch (error) {
+      blockers.push(error instanceof Error ? error.message : "UP 视频列表暂时没有读取到。");
+    }
+  }
+
+  if (selectedVideo && !videos.some((video) => video.bvid === selectedVideo?.bvid)) {
+    videos = [selectedVideo, ...videos];
+  }
+
+  const status: InformationBilibiliCollectResult["status"] = videos.length > 0
+    ? blockers.length > 0 ? "partial" : "ready"
+    : "blocked";
+
+  return {
+    status,
+    message: status === "ready"
+      ? "已完成采集。"
+      : status === "partial"
+        ? "已拿到部分结果，还有部分步骤需要处理。"
+        : "暂时没有拿到可用结果。",
+    up,
+    videos,
+    blockers,
+    collectedAt: new Date().toISOString()
+  };
+}
+
+async function readInformationToolStatus(): Promise<InformationToolStatus[]> {
+  const tools: Array<{ id: InformationToolStatus["id"]; name: string; command: string; args: string[]; missingMessage: string }> = [
+    { id: "yt-dlp", name: "视频下载", command: "yt-dlp", args: ["--version"], missingMessage: "未检测到视频下载工具。" },
+    { id: "ffmpeg", name: "音频处理", command: "ffmpeg", args: ["-version"], missingMessage: "未检测到音频处理工具。" },
+    { id: "whisper", name: "语音转写", command: "whisper", args: ["--help"], missingMessage: "未检测到本地转写工具。" }
+  ];
+
+  return Promise.all(tools.map(async (tool) => {
+    try {
+      const result = await execFileAsync(tool.command, tool.args, { timeout: 5000, windowsHide: true });
+      const version = `${result.stdout || result.stderr}`.split(/\r?\n/)[0]?.trim() ?? "";
+      return {
+        id: tool.id,
+        name: tool.name,
+        available: true,
+        version,
+        message: "已就绪"
+      };
+    } catch {
+      return {
+        id: tool.id,
+        name: tool.name,
+        available: false,
+        version: "",
+        message: tool.missingMessage
+      };
+    }
+  }));
+}
+
+function createInformationStep(
+  id: InformationProcessStep["id"],
+  name: string,
+  status: InformationProcessStep["status"],
+  message: string
+): InformationProcessStep {
+  return { id, name, status, message };
+}
+
+function getInformationCollectionRuntimeRoot() {
+  return getAistudyDataPath("runtime", "information-collection");
+}
+
+function sanitizeFileSegment(value: string) {
+  return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80) || "untitled";
+}
+
+async function readTextFilesFromDirectory(dirPath: string, extensions: string[]) {
+  const collected: string[] = [];
+  const files = await fs.readdir(dirPath).catch(() => []);
+  for (const fileName of files) {
+    const lowerName = fileName.toLowerCase();
+    if (!extensions.some((extension) => lowerName.endsWith(extension))) continue;
+    const rawText = await fs.readFile(path.join(dirPath, fileName), "utf8").catch(() => "");
+    if (!rawText.trim()) continue;
+    collected.push(rawText);
+  }
+  return collected;
+}
+
+function normalizeSubtitleText(rawText: string) {
+  return rawText
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && line !== "WEBVTT" && !/^\d+$/.test(line) && !/^\d\d:\d\d[:.]/.test(line))
+    .join("\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function describeBilibiliToolFailure(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/412|Precondition Failed/i.test(message)) {
+    return "B站限制了本次访问。请在端口管理打开 B站、确认已登录后重试。";
+  }
+  if (/cookies?/i.test(message)) {
+    return "B站登录态没有带上。请先通过端口管理打开 B站并保持登录。";
+  }
+  if (/ffmpeg/i.test(message)) {
+    return "ffmpeg 没有准备好，音频无法处理。";
+  }
+  if (/timed? out|timeout/i.test(message)) {
+    return "该步骤执行超时，请稍后重试或先打开 B站端口确认视频可播放。";
+  }
+  return fallback;
+}
+
+function extractFirstUrl(value: string) {
+  return value.match(/https?:\/\/[^\s"'<>]+/i)?.[0] ?? "";
+}
+
+function decodeHtmlText(value: string) {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCharCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCharCode(Number.parseInt(code, 16)));
+}
+
+function stripHtmlToText(html: string) {
+  return decodeHtmlText(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/section>/gi, "\n")
+    .replace(/<[^>]+>/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function extractWeixinArticleText(html: string) {
+  if (/环境异常|captcha|继续访问/.test(html) && !/js_content|rich_media_content/.test(html)) {
+    return { blocked: true, text: "", title: "" };
+  }
+
+  const title = decodeHtmlText(
+    html.match(/var msg_title = "([\s\S]*?)";/)?.[1]
+    || html.match(/<meta property="og:title" content="([\s\S]*?)"/)?.[1]
+    || html.match(/<title>([\s\S]*?)<\/title>/)?.[1]
+    || ""
+  ).trim();
+
+  const contentMatch =
+    html.match(/<div[^>]+id="js_content"[\s\S]*?<\/div>\s*<\/div>/i)
+    || html.match(/<div[^>]+class="[^"]*rich_media_content[^"]*"[\s\S]*?<\/div>/i);
+  const text = contentMatch ? stripHtmlToText(contentMatch[0]) : "";
+  return { blocked: false, text, title };
+}
+
+async function fetchOfficialArticleText(url: string, workDir: string) {
+  if (!url) return { status: "missing" as const, text: "", message: "视频简介没有发现文字稿链接。" };
+  try {
+    const html = await fetch(url, {
+      headers: {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    }).then((response) => response.text());
+    await fs.writeFile(path.join(workDir, "official-article.html"), html, "utf8").catch(() => undefined);
+    if (url.includes("mp.weixin.qq.com")) {
+      const article = extractWeixinArticleText(html);
+      if (article.blocked) {
+        return { status: "blocked" as const, text: "", message: "文字稿页面需要在浏览器里完成访问验证。" };
+      }
+      if (article.text.length > 80) {
+        await fs.writeFile(path.join(workDir, "official-article.txt"), article.text, "utf8").catch(() => undefined);
+        return { status: "available" as const, text: article.text, message: "已读取视频简介中的官方文字稿。" };
+      }
+    }
+    const text = stripHtmlToText(html);
+    if (text.length > 80) {
+      await fs.writeFile(path.join(workDir, "official-article.txt"), text, "utf8").catch(() => undefined);
+      return { status: "available" as const, text, message: "已读取视频简介中的文字稿。" };
+    }
+    return { status: "missing" as const, text: "", message: "文字稿页面没有读到可用正文。" };
+  } catch {
+    return { status: "blocked" as const, text: "", message: "文字稿链接暂时无法读取。" };
+  }
+}
+
+async function runExecFile(command: string, args: string[], cwd: string, timeoutMs: number) {
+  return execFileAsync(command, args, {
+    cwd,
+    timeout: timeoutMs,
+    windowsHide: true,
+    maxBuffer: 16 * 1024 * 1024
+  });
+}
+
+async function processBilibiliVideo(input: unknown): Promise<InformationBilibiliProcessResult> {
+  const request = input && typeof input === "object" ? input as InformationBilibiliCollectRequest : {};
+  const bvid = normalizeBilibiliBvid(request.bvid);
+  const cookieHeader = await getBilibiliCookieHeader();
+  const workDir = bvid ? path.join(getInformationCollectionRuntimeRoot(), "bilibili", bvid) : getInformationCollectionRuntimeRoot();
+  const steps: InformationProcessStep[] = [];
+  await fs.mkdir(workDir, { recursive: true });
+
+  if (!bvid) {
+    return {
+      status: "blocked",
+      message: "需要先选择一个视频。",
+      video: null,
+      steps: [createInformationStep("metadata", "读取视频", "blocked", "缺少 BV 号。")],
+      workDir
+    };
+  }
+
+  steps.push(createInformationStep("metadata", "读取视频", "running", "正在读取视频信息。"));
+  let video: InformationBilibiliVideo;
+  try {
+    video = await fetchBilibiliVideoByBvid(bvid, cookieHeader);
+    steps[0] = createInformationStep("metadata", "读取视频", "done", "已读取视频信息。");
+  } catch (error) {
+    steps[0] = createInformationStep("metadata", "读取视频", "blocked", error instanceof Error ? error.message : "视频信息没有读取到。");
+    return {
+      status: "blocked",
+      message: "视频处理没有开始。",
+      video: null,
+      steps,
+      workDir
+    };
+  }
+
+  if (video.transcript.status === "available") {
+    steps.push(createInformationStep("subtitle", "读取字幕", "done", "已读取公开字幕。"));
+    return {
+      status: "ready",
+      message: "已完成转录读取。",
+      video,
+      steps,
+      workDir
+    };
+  }
+
+  steps.push(createInformationStep("subtitle", "读取字幕", "skipped", video.transcript.message));
+  steps.push(createInformationStep("official-text", "读取文字稿", "running", "正在检查视频简介里的文字稿。"));
+  const officialArticle = await fetchOfficialArticleText(extractFirstUrl(video.description), workDir);
+  if (officialArticle.status === "available") {
+    const nextVideo = {
+      ...video,
+      transcript: {
+        status: "available" as const,
+        text: officialArticle.text,
+        message: officialArticle.message
+      }
+    };
+    steps[2] = createInformationStep("official-text", "读取文字稿", "done", officialArticle.message);
+    return {
+      status: "ready",
+      message: "已读取官方文字稿。",
+      video: nextVideo,
+      steps,
+      workDir
+    };
+  }
+  steps[2] = createInformationStep(
+    "official-text",
+    "读取文字稿",
+    "skipped",
+    officialArticle.status === "blocked" ? `${officialArticle.message}，继续尝试下载字幕。` : officialArticle.message
+  );
+
+  const tools = await readInformationToolStatus();
+  const toolMap = new Map(tools.map((tool) => [tool.id, tool]));
+  const ytDlpReady = Boolean(toolMap.get("yt-dlp")?.available);
+  const ffmpegReady = Boolean(toolMap.get("ffmpeg")?.available);
+  const whisperReady = Boolean(toolMap.get("whisper")?.available);
+
+  steps.push(createInformationStep("download", "下载字幕", "running", "正在尝试下载字幕文件。"));
+  if (!ytDlpReady) {
+    steps[3] = createInformationStep("download", "下载字幕", "blocked", "缺少 yt-dlp，无法下载字幕或音频。");
+    steps.push(createInformationStep("transcribe", "语音转写", "skipped", "前置步骤未完成。"));
+    return {
+      status: "blocked",
+      message: "转录工具还没有准备好。",
+      video,
+      steps,
+      workDir
+    };
+  }
+
+  const outputBase = path.join(workDir, `${sanitizeFileSegment(video.bvid)}-%(title).50s`);
+  const cookiePath = await writeBilibiliCookiesFile(workDir);
+  try {
+    await runExecFile(
+      "yt-dlp",
+      [
+        ...(cookiePath ? ["--cookies", cookiePath] : []),
+        "--skip-download",
+        "--write-subs",
+        "--write-auto-subs",
+        "--sub-langs",
+        "zh-CN,zh-Hans,zh,all",
+        "--sub-format",
+        "vtt/srt/best",
+        "--output",
+        outputBase,
+        video.url
+      ],
+      workDir,
+      120000
+    );
+    const subtitleTexts = await readTextFilesFromDirectory(workDir, [".vtt", ".srt"]);
+    const transcript = subtitleTexts.map(normalizeSubtitleText).filter(Boolean).join("\n\n");
+    if (transcript) {
+      const nextVideo = {
+        ...video,
+        transcript: {
+          status: "available" as const,
+          text: transcript,
+          message: "已通过字幕文件生成转录。"
+        }
+      };
+      steps[3] = createInformationStep("download", "下载字幕", "done", "已通过字幕文件生成转录。");
+      return {
+        status: "ready",
+        message: "已完成转录。",
+        video: nextVideo,
+        steps,
+        workDir
+      };
+    }
+    steps[3] = createInformationStep("download", "下载字幕", "skipped", "没有可用字幕，进入音频转写。");
+  } catch (error) {
+    steps[3] = createInformationStep("download", "下载字幕", "skipped", describeBilibiliToolFailure(error, "字幕没有拿到，进入音频转写。"));
+  }
+
+  steps.push(createInformationStep("download", "下载音频", "pending", "等待下载音频。"));
+  steps.push(createInformationStep("transcribe", "语音转写", "pending", "等待语音转写。"));
+
+  if (!ffmpegReady || !whisperReady) {
+    steps[4] = createInformationStep("download", "下载音频", ffmpegReady ? "pending" : "blocked", ffmpegReady ? "等待语音转写工具。" : "缺少 ffmpeg，无法抽取音频。");
+    steps[5] = createInformationStep("transcribe", "语音转写", whisperReady ? "pending" : "blocked", whisperReady ? "等待音频文件。" : "缺少 Whisper，无法本地转写。");
+    return {
+      status: "blocked",
+      message: "视频没有公开字幕，音频转写依赖还没有准备好。",
+      video,
+      steps,
+      workDir
+    };
+  }
+
+  try {
+    steps[4] = createInformationStep("download", "下载音频", "running", "正在下载音频。");
+    const audioBase = path.join(workDir, `${sanitizeFileSegment(video.bvid)}-audio.%(ext)s`);
+    await runExecFile(
+      "yt-dlp",
+      [
+        ...(cookiePath ? ["--cookies", cookiePath] : []),
+        "-f",
+        "ba/bestaudio",
+        "--output",
+        audioBase,
+        video.url
+      ],
+      workDir,
+      10 * 60 * 1000
+    );
+    steps[4] = createInformationStep("download", "下载音频", "done", "音频已下载。");
+    const audioFiles = (await fs.readdir(workDir)).filter((fileName) => /\.(mp3|m4a|wav|webm)$/i.test(fileName));
+    const audioPath = audioFiles.length ? path.join(workDir, audioFiles[0]) : "";
+    if (!audioPath) throw new Error("音频文件没有生成。");
+
+    steps[5] = createInformationStep("transcribe", "语音转写", "running", "正在语音转写。");
+    await runExecFile("whisper", [audioPath, "--language", "Chinese", "--output_dir", workDir, "--output_format", "txt"], workDir, 30 * 60 * 1000);
+    const transcript = (await readTextFilesFromDirectory(workDir, [".txt"])).join("\n\n").trim();
+    if (!transcript) throw new Error("转写文本没有生成。");
+    const nextVideo = {
+      ...video,
+      transcript: {
+        status: "available" as const,
+        text: transcript,
+        message: "已完成本地语音转写。"
+      }
+    };
+    steps[5] = createInformationStep("transcribe", "语音转写", "done", "已完成本地语音转写。");
+    return {
+      status: "ready",
+      message: "已完成转录。",
+      video: nextVideo,
+      steps,
+      workDir
+    };
+  } catch (error) {
+    const currentIndex = steps.findIndex((step) => step.status === "running");
+    if (currentIndex >= 0) {
+      steps[currentIndex] = {
+        ...steps[currentIndex],
+        status: "blocked",
+        message: describeBilibiliToolFailure(error, error instanceof Error ? error.message : "该步骤没有完成。")
+      };
+    }
+    return {
+      status: "blocked",
+      message: "视频转录没有完成。",
+      video,
+      steps,
+      workDir
+    };
+  }
+}
+
+async function openBilibiliCollectionTarget(input: unknown) {
+  const request = input && typeof input === "object" ? input as InformationBilibiliCollectRequest : {};
+  const bvid = normalizeBilibiliBvid(request.bvid);
+  const mid = normalizePositiveNumber(request.mid, 0);
+  const upName = typeof request.upName === "string" ? request.upName.trim() : "";
+  const url = bvid
+    ? `https://www.bilibili.com/video/${bvid}/`
+    : mid
+      ? `https://space.bilibili.com/${mid}/video`
+      : upName
+        ? `https://search.bilibili.com/upuser?keyword=${encodeURIComponent(upName)}`
+        : "https://www.bilibili.com/";
+  return openChromePortPage("bilibili", url);
 }
 
 function cookieMatchesPlatformAuth(platform: ChromePortDefinition, cookie: ChromeCookie) {
@@ -1186,6 +2080,7 @@ function getAiChatAutomationExpression(provider: AiChatProvider, prompt: string,
       if (descriptor?.set) descriptor.set.call(input, "");
       else input.value = "";
       input.dispatchEvent(new InputEvent("input", { bubbles: true, data: null, inputType: "deleteContentBackward" }));
+      input.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: prompt, inputType: "insertText" }));
       if (descriptor?.set) descriptor.set.call(input, prompt);
       else input.value = prompt;
       input.dispatchEvent(new InputEvent("input", { bubbles: true, data: prompt, inputType: "insertText" }));
@@ -1422,11 +2317,12 @@ function getChatGptSubmitExpression(prompt: string, requestId: string) {
     range.deleteContents();
     selection?.removeAllRanges();
     selection?.addRange(range);
+    input.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: prompt, inputType: "insertText" }));
     document.execCommand("insertText", false, prompt);
     input.dispatchEvent(new InputEvent("input", { bubbles: true, data: prompt, inputType: "insertText" }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
   };
   writePrompt();
-  await sleep(250);
 
   const buttonLabel = (element) => [element.id, element.getAttribute("data-testid"), element.innerText, element.getAttribute("aria-label"), element.getAttribute("title")]
     .filter(Boolean).join(" ").toLowerCase();
@@ -1441,11 +2337,17 @@ function getChatGptSubmitExpression(prompt: string, requestId: string) {
   const form = input.closest("form");
   const scanButtons = () => Array.from(document.querySelectorAll("button,[role='button']"))
     .filter((element) => visible(element) && !element.disabled && element.getAttribute("aria-disabled") !== "true");
-  let sendButton = Array.from(form?.querySelectorAll("button,[role='button']") || [])
+  const findSendButton = () => Array.from(form?.querySelectorAll("button,[role='button']") || [])
     .filter((element) => visible(element) && !element.disabled && element.getAttribute("aria-disabled") !== "true")
     .find(isSendButton)
     || scanButtons().find(isSendButton)
-    || document.querySelector("button[data-testid='send-button'],button[data-testid='composer-submit-button'],button[aria-label*='Send'],button[aria-label*='发送']");
+    || document.querySelector("#composer-submit-button,button[data-testid='send-button'],button[data-testid='composer-submit-button'],button[aria-label*='Send'],button[aria-label*='发送'],button[aria-label*='发送提示'],button.composer-submit-btn");
+  let sendButton = null;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    sendButton = findSendButton();
+    if (sendButton && visible(sendButton) && !sendButton.disabled && sendButton.getAttribute("aria-disabled") !== "true") break;
+    await sleep(150);
+  }
   if (!sendButton || !visible(sendButton) || sendButton.disabled || sendButton.getAttribute("aria-disabled") === "true") {
     return { ok: false, blocker: "send-button-not-found" };
   }
@@ -1620,12 +2522,329 @@ async function dispatchChatGptMouseClick(target: ChromeDebugTarget, point: { x?:
   );
 }
 
+async function dispatchChatGptEnter(target: ChromeDebugTarget) {
+  const keyParams = {
+    key: "Enter",
+    code: "Enter",
+    windowsVirtualKeyCode: 13,
+    nativeVirtualKeyCode: 13
+  };
+  await sendChromeCdpCommand(
+    target.webSocketDebuggerUrl!,
+    "Input.dispatchKeyEvent",
+    { ...keyParams, type: "keyDown" },
+    700
+  );
+  await sendChromeCdpCommand(
+    target.webSocketDebuggerUrl!,
+    "Input.dispatchKeyEvent",
+    { ...keyParams, type: "keyUp" },
+    700
+  );
+}
+
 type ChatGptReplyProbePayload = {
   reply?: string;
   blocker?: string;
   generating?: boolean;
   assistantCount?: number;
 };
+
+type ChatGptPreparePayload = {
+  ok?: boolean;
+  blocker?: string;
+  sendPoint?: { x?: unknown; y?: unknown };
+  beforeLength?: number;
+  beforeAssistantText?: string;
+};
+
+function getChatGptPrepareExpression(prompt: string) {
+  return `
+(async () => {
+  const prompt = ${JSON.stringify(prompt)};
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  };
+  const roleBlocks = () => Array.from(document.querySelectorAll("[data-message-author-role]")).filter(visible);
+  const textOf = (element) => element?.innerText || element?.textContent || "";
+  const cleanReply = (text) => String(text || "")
+    .split("\\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !["发送", "停止生成", "重新生成", "Search", "Reason", "Canvas", "来源"].includes(line))
+    .filter((line) => !line.includes("ChatGPT can make mistakes") && !line.includes("ChatGPT 也可能会犯错"))
+    .join("\\n")
+    .trim();
+  const gateWords = ["Log in", "Sign up", "登录", "注册", "验证", "captcha", "Cloudflare", "Checking your browser"];
+  const hasGate = () => gateWords.some((word) => (document.body?.innerText || "").includes(word));
+  const beforeBlocks = roleBlocks();
+  const beforeLength = beforeBlocks.length;
+  const beforeAssistantText = cleanReply(textOf([...beforeBlocks].reverse().find((block) => block.getAttribute("data-message-author-role") === "assistant")));
+  const findInput = () => ["#prompt-textarea", "[contenteditable='true'][id='prompt-textarea']", "[contenteditable='true']", "textarea", "[role='textbox']"]
+    .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+    .find((element) => visible(element) && !element.disabled && element.getAttribute("aria-disabled") !== "true" && !element.readOnly);
+  let input = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    input = findInput();
+    if (input) break;
+    await sleep(150);
+  }
+  if (!input) return { ok: false, blocker: hasGate() ? "login-or-verification" : "input-not-found" };
+
+  input.focus({ preventScroll: true });
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(input);
+  range.deleteContents();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  input.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: prompt, inputType: "insertText" }));
+  document.execCommand("insertText", false, prompt);
+  input.dispatchEvent(new InputEvent("input", { bubbles: true, data: prompt, inputType: "insertText" }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+
+  const buttonLabel = (element) => [element.id, element.getAttribute("data-testid"), element.innerText, element.getAttribute("aria-label"), element.getAttribute("title")]
+    .filter(Boolean).join(" ").toLowerCase();
+  const isSendButton = (element) => {
+    const label = buttonLabel(element);
+    return label.includes("send") || label.includes("发送") || label.includes("submit") || label.includes("composer-submit-button") || label.includes("send-button");
+  };
+  const findSendButton = () => Array.from(document.querySelectorAll("button,[role='button']"))
+    .filter((element) => visible(element) && !element.disabled && element.getAttribute("aria-disabled") !== "true")
+    .find(isSendButton)
+    || document.querySelector("#composer-submit-button,button[data-testid='send-button'],button[data-testid='composer-submit-button'],button[aria-label*='Send'],button[aria-label*='发送'],button[aria-label*='发送提示'],button.composer-submit-btn");
+  let sendButton = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    sendButton = findSendButton();
+    if (sendButton && visible(sendButton) && !sendButton.disabled && sendButton.getAttribute("aria-disabled") !== "true") break;
+    await sleep(150);
+  }
+  if (!sendButton || !visible(sendButton) || sendButton.disabled || sendButton.getAttribute("aria-disabled") === "true") {
+    return { ok: false, blocker: "send-button-not-found" };
+  }
+  const rect = sendButton.getBoundingClientRect();
+  return {
+    ok: true,
+    blocker: "",
+    beforeLength,
+    beforeAssistantText,
+    sendPoint: {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2
+    }
+  };
+})()
+`;
+}
+
+function getChatGptReplyAfterSendExpression(beforeLength: number, beforeAssistantText: string) {
+  return `
+(async () => {
+  const beforeLength = ${JSON.stringify(beforeLength)};
+  const beforeAssistantText = ${JSON.stringify(beforeAssistantText)};
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  };
+  const roleBlocks = () => Array.from(document.querySelectorAll("[data-message-author-role]")).filter(visible);
+  const textOf = (element) => element?.innerText || element?.textContent || "";
+  const cleanReply = (text) => String(text || "")
+    .split("\\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !["发送", "停止生成", "重新生成", "Search", "Reason", "Canvas", "来源"].includes(line))
+    .filter((line) => !line.includes("ChatGPT can make mistakes") && !line.includes("ChatGPT 也可能会犯错"))
+    .join("\\n")
+    .trim();
+  let userIndex = -1;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const blocks = roleBlocks();
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+      if (blocks[index].getAttribute("data-message-author-role") === "user" && index >= beforeLength) {
+        userIndex = index;
+        break;
+      }
+    }
+    if (userIndex >= 0) break;
+    await sleep(250);
+  }
+  if (userIndex < 0) return { ok: false, blocker: "user-block-not-created", reply: "" };
+
+  let stableText = "";
+  let stableCount = 0;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 150000) {
+    await sleep(1000);
+    const blocks = roleBlocks();
+    const replies = [];
+    for (let index = userIndex + 1; index < blocks.length; index += 1) {
+      const role = blocks[index].getAttribute("data-message-author-role");
+      if (role === "user") break;
+      if (role === "assistant") {
+        const reply = cleanReply(textOf(blocks[index]));
+        if (reply && reply !== beforeAssistantText) replies.push(reply);
+      }
+    }
+    const reply = replies.join("\\n\\n").trim();
+    const generating = (document.body?.innerText || "").includes("停止生成")
+      || (document.body?.innerText || "").includes("正在生成")
+      || (document.body?.innerText || "").includes("生成中")
+      || Boolean(document.querySelector("button[data-testid='stop-button'],button[aria-label*='Stop'],button[aria-label*='停止'],button[aria-label*='正在']"));
+    if (reply && reply === stableText) stableCount += 1;
+    else {
+      stableText = reply;
+      stableCount = reply ? 1 : 0;
+    }
+    if (stableText && stableCount >= 2 && !generating) {
+      return { ok: true, blocker: "", reply: stableText };
+    }
+  }
+  return { ok: false, blocker: stableText ? "reply-not-settled" : "reply-timeout", reply: stableText };
+})()
+`;
+}
+
+function getChatGptBridgeExpression(prompt: string) {
+  return `
+(async () => {
+  const prompt = ${JSON.stringify(prompt)};
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const visible = (element) => {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  };
+  const roleBlocks = () => Array.from(document.querySelectorAll("[data-message-author-role]")).filter(visible);
+  const textOf = (element) => element?.innerText || element?.textContent || "";
+  const cleanReply = (text) => String(text || "")
+    .split("\\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !["发送", "停止生成", "重新生成", "Search", "Reason", "Canvas", "来源"].includes(line))
+    .filter((line) => !line.includes("ChatGPT can make mistakes") && !line.includes("ChatGPT 也可能会犯错"))
+    .join("\\n")
+    .trim();
+  const gateWords = ["Log in", "Sign up", "登录", "注册", "验证", "captcha", "Cloudflare", "Checking your browser"];
+  const hasGate = () => gateWords.some((word) => (document.body?.innerText || "").includes(word));
+  const beforeBlocks = roleBlocks();
+  const beforeLength = beforeBlocks.length;
+  const beforeAssistantText = cleanReply(textOf([...beforeBlocks].reverse().find((block) => block.getAttribute("data-message-author-role") === "assistant")));
+
+  const findInput = () => ["#prompt-textarea", "[contenteditable='true'][id='prompt-textarea']", "[contenteditable='true']", "textarea", "[role='textbox']"]
+    .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+    .find((element) => visible(element) && !element.disabled && element.getAttribute("aria-disabled") !== "true" && !element.readOnly);
+  let input = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    input = findInput();
+    if (input) break;
+    await sleep(150);
+  }
+  if (!input) return { ok: false, blocker: hasGate() ? "login-or-verification" : "input-not-found", reply: "" };
+
+  input.focus({ preventScroll: true });
+  if ("value" in input) {
+    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")
+      || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    if (descriptor?.set) descriptor.set.call(input, "");
+    else input.value = "";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: null, inputType: "deleteContentBackward" }));
+    input.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: prompt, inputType: "insertText" }));
+    if (descriptor?.set) descriptor.set.call(input, prompt);
+    else input.value = prompt;
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: prompt, inputType: "insertText" }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  } else {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(input);
+    range.deleteContents();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    input.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, data: prompt, inputType: "insertText" }));
+    document.execCommand("insertText", false, prompt);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: prompt, inputType: "insertText" }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  const buttonLabel = (element) => [element.id, element.getAttribute("data-testid"), element.innerText, element.getAttribute("aria-label"), element.getAttribute("title")]
+    .filter(Boolean).join(" ").toLowerCase();
+  const isSendButton = (element) => {
+    const label = buttonLabel(element);
+    return label.includes("send") || label.includes("发送") || label.includes("submit") || label.includes("composer-submit-button") || label.includes("send-button");
+  };
+  const findSendButton = () => Array.from(document.querySelectorAll("button,[role='button']"))
+    .filter((element) => visible(element) && !element.disabled && element.getAttribute("aria-disabled") !== "true")
+    .find(isSendButton)
+    || document.querySelector("#composer-submit-button,button[data-testid='send-button'],button[data-testid='composer-submit-button'],button[aria-label*='Send'],button[aria-label*='发送'],button[aria-label*='发送提示'],button.composer-submit-btn");
+  let sendButton = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    sendButton = findSendButton();
+    if (sendButton && visible(sendButton) && !sendButton.disabled && sendButton.getAttribute("aria-disabled") !== "true") break;
+    await sleep(150);
+  }
+  if (!sendButton || !visible(sendButton) || sendButton.disabled || sendButton.getAttribute("aria-disabled") === "true") {
+    return { ok: false, blocker: "send-button-not-found", reply: "" };
+  }
+  sendButton.click();
+
+  let userIndex = -1;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const blocks = roleBlocks();
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+      if (blocks[index].getAttribute("data-message-author-role") === "user" && index >= beforeLength) {
+        userIndex = index;
+        break;
+      }
+    }
+    if (userIndex >= 0) break;
+    await sleep(250);
+  }
+  if (userIndex < 0) {
+    return { ok: false, blocker: hasGate() ? "login-or-verification" : "user-block-not-created", reply: "" };
+  }
+
+  let stableText = "";
+  let stableCount = 0;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 150000) {
+    await sleep(1000);
+    const blocks = roleBlocks();
+    const replies = [];
+    for (let index = userIndex + 1; index < blocks.length; index += 1) {
+      const role = blocks[index].getAttribute("data-message-author-role");
+      if (role === "user") break;
+      if (role === "assistant") {
+        const reply = cleanReply(textOf(blocks[index]));
+        if (reply && reply !== beforeAssistantText) replies.push(reply);
+      }
+    }
+    const reply = replies.join("\\n\\n").trim();
+    const generating = (document.body?.innerText || "").includes("停止生成")
+      || (document.body?.innerText || "").includes("正在生成")
+      || (document.body?.innerText || "").includes("生成中")
+      || Boolean(document.querySelector("button[data-testid='stop-button'],button[aria-label*='Stop'],button[aria-label*='停止'],button[aria-label*='正在']"));
+    if (reply && reply === stableText) stableCount += 1;
+    else {
+      stableText = reply;
+      stableCount = reply ? 1 : 0;
+    }
+    if (hasGate() && !stableText) {
+      return { ok: false, blocker: "login-or-verification", reply: "" };
+    }
+    if (stableText && stableCount >= 2 && !generating) {
+      return { ok: true, blocker: "", reply: stableText };
+    }
+  }
+
+  return { ok: false, blocker: stableText ? "reply-not-settled" : "reply-timeout", reply: stableText };
+})()
+`;
+}
 
 async function probeChatGptReply(target: ChromeDebugTarget, requestId: string): Promise<ChatGptReplyProbePayload> {
   const probeResult = await sendChromeCdpCommand(
@@ -1730,22 +2949,51 @@ async function submitAndPollChatGpt(target: ChromeDebugTarget, prompt: string, r
   return { ok: false, blocker: "reply-timeout", reply: "", deadShell: false };
 }
 
-async function sendChatGptAiChat(target: ChromeDebugTarget, prompt: string, requestId: string): Promise<AiChatResult> {
-  const firstAttempt = await submitAndPollChatGpt(target, prompt, requestId);
-  if (firstAttempt.ok && firstAttempt.reply) {
-    return { ok: true, provider: "chatgpt", reply: firstAttempt.reply };
-  }
-
-  if (firstAttempt.deadShell) {
-    await resetChatGptConversation(target);
-    const retryAttempt = await submitAndPollChatGpt(target, prompt, randomUUID());
-    if (retryAttempt.ok && retryAttempt.reply) {
-      return { ok: true, provider: "chatgpt", reply: retryAttempt.reply };
+async function sendChatGptAiChat(target: ChromeDebugTarget, prompt: string, _requestId: string): Promise<AiChatResult> {
+  const prepareResult = await sendChromeCdpCommand(
+    target.webSocketDebuggerUrl!,
+    "Runtime.evaluate",
+    {
+      expression: getChatGptPrepareExpression(prompt),
+      awaitPromise: true,
+      returnByValue: true,
+      timeout: 45000
+    },
+    50000
+  );
+  const preparePayload = unwrapRuntimeEvaluationValue(prepareResult, "ChatGPT") as ChatGptPreparePayload | undefined;
+  if (!preparePayload?.ok) {
+    if (preparePayload?.blocker === "login-or-verification") {
+      throw new Error("ChatGPT 需要登录或验证，请先在端口管理确认登录状态");
     }
-    throw new Error(retryAttempt.blocker ? `ChatGPT 未返回结果：${retryAttempt.blocker}` : "ChatGPT 未返回结果");
+    throw new Error(preparePayload?.blocker ? `ChatGPT 未返回结果：${preparePayload.blocker}` : "ChatGPT 未返回结果");
   }
 
-  throw new Error(firstAttempt.blocker ? `ChatGPT 未返回结果：${firstAttempt.blocker}` : "ChatGPT 未返回结果");
+  await dispatchChatGptEnter(target);
+
+  const replyResult = await sendChromeCdpCommand(
+    target.webSocketDebuggerUrl!,
+    "Runtime.evaluate",
+    {
+      expression: getChatGptReplyAfterSendExpression(
+        typeof preparePayload.beforeLength === "number" ? preparePayload.beforeLength : 0,
+        typeof preparePayload.beforeAssistantText === "string" ? preparePayload.beforeAssistantText : ""
+      ),
+      awaitPromise: true,
+      returnByValue: true,
+      timeout: 170000
+    },
+    180000
+  );
+  const payload = unwrapRuntimeEvaluationValue(replyResult, "ChatGPT") as { ok?: boolean; blocker?: string; reply?: string } | undefined;
+  const reply = payload?.reply?.trim() ?? "";
+  if (payload?.ok && reply) {
+    return { ok: true, provider: "chatgpt", reply };
+  }
+  if (payload?.blocker === "login-or-verification") {
+    throw new Error("ChatGPT 需要登录或验证，请先在端口管理确认登录状态");
+  }
+  throw new Error(payload?.blocker ? `ChatGPT 未返回结果：${payload.blocker}` : "ChatGPT 未返回结果");
 }
 
 async function sendAiChat(rawRequest: unknown): Promise<AiChatResult> {
@@ -1789,6 +3037,36 @@ async function sendAiChat(rawRequest: unknown): Promise<AiChatResult> {
   throw new Error(payload?.blocker ? `${platform.name} 未返回结果：${payload.blocker}` : `${platform.name} 未返回结果`);
 }
 
+async function resolveChromeExecutableCandidate(candidate: string | undefined | null) {
+  const trimmed = candidate?.trim();
+  if (!trimmed) return null;
+
+  try {
+    await fs.access(trimmed);
+  } catch {
+    return null;
+  }
+
+  if (trimmed.toLowerCase().endsWith(".exe")) {
+    return trimmed;
+  }
+
+  if (!/\.(?:cmd|bat)$/i.test(trimmed)) {
+    return null;
+  }
+
+  try {
+    const launcher = await fs.readFile(trimmed, "utf8");
+    const match = launcher.match(/set\s+"?CHROME_EXE=([^"\r\n]+chrome\.exe)"?/i);
+    const executablePath = match?.[1]?.trim();
+    if (!executablePath) return null;
+    await fs.access(executablePath);
+    return executablePath;
+  } catch {
+    return null;
+  }
+}
+
 async function findChromeExecutable() {
   const registryCandidates = await getChromeRegistryCandidates();
   const candidates = [
@@ -1800,19 +3078,17 @@ async function findChromeExecutable() {
   ].filter((candidate, index, all): candidate is string => Boolean(candidate && candidate.trim()) && all.indexOf(candidate) === index);
 
   for (const candidate of candidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // Try the next common Chrome install path.
-    }
+    const chromePath = await resolveChromeExecutableCandidate(candidate);
+    if (chromePath) return chromePath;
   }
 
   if (process.platform === "win32") {
     try {
       const { stdout } = await execFileAsync("where.exe", ["chrome"], { windowsHide: true });
-      const chromePath = stdout.split(/\r?\n/).find((line) => line.trim().toLowerCase().endsWith("chrome.exe"));
-      if (chromePath) return chromePath.trim();
+      for (const line of stdout.split(/\r?\n/)) {
+        const chromePath = await resolveChromeExecutableCandidate(line);
+        if (chromePath) return chromePath;
+      }
     } catch {
       return null;
     }
@@ -1901,23 +3177,19 @@ function getChromePortStatuses() {
   return Promise.all(chromePortDefinitions.map((platform) => getChromePortStatus(platform)));
 }
 
-async function openChromePortLogin(platformId: unknown): Promise<ChromePortOpenResult> {
-  const platform = getChromePortDefinition(platformId);
-  if (!platform) {
-    throw new Error("未知的 Chrome 端口平台");
-  }
-
+async function openChromePortPage(platformId: unknown, url?: unknown): Promise<ChromePortOpenResult> {
+  const platform = getRequiredChromePortDefinition(platformId);
+  const targetUrl = normalizeChromePortOpenUrl(platform, url);
   if (await canConnectToLocalPort(platform.port)) {
-    const opened = await openUrlInChromePort(platform.port, platform.loginUrl);
+    const opened = await openUrlInChromePort(platform.port, targetUrl);
     await delay(700);
     const status = await getChromePortStatus(platform);
     return {
       status,
-      message: status.authenticated
-        ? `${platform.name} 已识别登录状态，端口 ${platform.port} 已保存`
-        : opened
-          ? `${platform.name} 登录页已在固定端口 ${platform.port} 打开，登录完成后会自动识别并保存`
-          : `${platform.name} 固定端口 ${platform.port} 已连接，请在对应 Chrome 窗口确认登录页`
+      openedUrl: targetUrl,
+      message: opened
+        ? `${platform.name} 页面已在固定端口 ${platform.port} 打开`
+        : `${platform.name} 固定端口 ${platform.port} 已连接，请在对应 Chrome 窗口确认页面`
     };
   }
 
@@ -1936,7 +3208,7 @@ async function openChromePortLogin(platformId: unknown): Promise<ChromePortOpenR
       "--no-first-run",
       "--no-default-browser-check",
       "--new-window",
-      platform.loginUrl
+      targetUrl
     ],
     {
       detached: true,
@@ -1951,9 +3223,21 @@ async function openChromePortLogin(platformId: unknown): Promise<ChromePortOpenR
   const status = await getChromePortStatus(platform);
   return {
     status,
-    message: status.authenticated
+    openedUrl: targetUrl,
+    message: ready
+      ? `${platform.name} 页面已启动，端口 ${platform.port} 已连接`
+      : `${platform.name} 页面已尝试启动，端口 ${platform.port} 暂未就绪`
+  };
+}
+
+async function openChromePortLogin(platformId: unknown): Promise<ChromePortOpenResult> {
+  const platform = getRequiredChromePortDefinition(platformId);
+  const result = await openChromePortPage(platform.id, platform.loginUrl);
+  return {
+    ...result,
+    message: result.status.authenticated
       ? `${platform.name} 已识别登录状态，端口 ${platform.port} 已保存`
-      : ready
+      : result.status.connected
         ? `${platform.name} 登录窗口已启动，端口 ${platform.port} 已连接；登录完成后会自动识别并保存`
         : `${platform.name} 登录窗口已尝试启动，端口 ${platform.port} 暂未就绪`
   };
@@ -3120,6 +4404,13 @@ function createDiagnosticItem(
   return { id, name, status, message, action, retryable };
 }
 
+function formatRuntimeDiagnosticStatus(status: RuntimeDiagnosticStatus) {
+  if (status === "ok") return "正常";
+  if (status === "warning") return "需关注";
+  if (status === "error") return "不可用";
+  return "未启用";
+}
+
 async function checkRuntimeDataRoot(): Promise<RuntimeDiagnosticItem> {
   try {
     const requiredDirectories = [
@@ -3197,6 +4488,34 @@ async function checkChromePortRuntime(platform: ChromePortDefinition): Promise<R
   }
 }
 
+async function checkInformationCollectionRuntime(): Promise<RuntimeDiagnosticItem> {
+  try {
+    const runtimeRoot = getInformationCollectionRuntimeRoot();
+    await fs.mkdir(runtimeRoot, { recursive: true });
+    const probePath = path.join(runtimeRoot, `.write-test-${process.pid}-${randomUUID()}.tmp`);
+    await fs.writeFile(probePath, "ok", "utf8");
+    await fs.rm(probePath, { force: true });
+    return createDiagnosticItem("information-collection-runtime", "信息采集目录", "ok", "采集运行目录可以正常读写。", "无需处理。", false);
+  } catch {
+    return createDiagnosticItem("information-collection-runtime", "信息采集目录", "error", "采集运行目录不可写。", "请检查数据目录权限或磁盘空间。");
+  }
+}
+
+async function checkInformationToolRuntime(toolId: InformationToolStatus["id"]): Promise<RuntimeDiagnosticItem> {
+  const tools = await readInformationToolStatus();
+  const tool = tools.find((item) => item.id === toolId);
+  const name = tool?.name ?? toolId;
+  if (tool?.available) {
+    return createDiagnosticItem(`information-tool-${toolId}`, name, "ok", `${name} 已就绪。`, "无需处理。", false);
+  }
+  const action = toolId === "yt-dlp"
+    ? "请安装 yt-dlp，或把 yt-dlp 所在目录加入 PATH。"
+    : toolId === "ffmpeg"
+      ? "请安装 ffmpeg，或把 ffmpeg 所在目录加入 PATH。"
+      : "请安装 Whisper 或后续配置可用的本地转写程序。";
+  return createDiagnosticItem(`information-tool-${toolId}`, name, "warning", `${name} 未就绪，视频转录链路会停在对应步骤。`, action);
+}
+
 async function fetchJsonWithTimeout(url: string, timeoutMs: number) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -3252,12 +4571,46 @@ async function diagnoseRuntime(): Promise<RuntimeDiagnosticResult> {
     await checkErrorLogRuntime(),
     await checkChromeRuntime(),
     ...(await Promise.all(chromePortDefinitions.map((platform) => checkChromePortRuntime(platform)))),
+    await checkInformationCollectionRuntime(),
+    ...(await Promise.all((["yt-dlp", "ffmpeg", "whisper"] as const).map((toolId) => checkInformationToolRuntime(toolId)))),
     await checkUpdateRuntime()
   ];
   return {
     checkedAt: new Date().toISOString(),
     summary: summarizeRuntimeDiagnostics(items),
     items
+  };
+}
+
+function buildRuntimeDiagnosticReport(diagnostic: RuntimeDiagnosticResult) {
+  const summary = diagnostic.summary;
+  const lines = [
+    "AIstudy 诊断报告",
+    "",
+    `生成时间：${new Date(diagnostic.checkedAt).toLocaleString("zh-CN")}`,
+    `应用版本：${app.getVersion()}`,
+    `数据目录：${getAistudyDataRoot()}`,
+    `用户目录：${app.getPath("userData")}`,
+    "",
+    `汇总：${summary.ok} 正常，${summary.warning} 需关注，${summary.error} 不可用，${summary.disabled} 未启用`,
+    "",
+    "检查项：",
+    ...diagnostic.items.map((item) => {
+      const retryText = item.retryable ? "可重试" : "无需重试";
+      return `- [${formatRuntimeDiagnosticStatus(item.status)}] ${item.name}：${item.message} 处理建议：${item.action} (${retryText})`;
+    }),
+    "",
+    "说明：这份报告用于协助定位本机运行环境、数据目录、数据库、浏览器端口和更新服务状态。"
+  ];
+  return lines.join("\n");
+}
+
+async function copyRuntimeDiagnosticReport(): Promise<RuntimeDiagnosticReportCopyResult> {
+  const diagnostic = await diagnoseRuntime();
+  clipboard.writeText(buildRuntimeDiagnosticReport(diagnostic));
+  return {
+    copied: true,
+    diagnostic
   };
 }
 
@@ -4542,12 +5895,30 @@ async function createCourseCommand(input: CourseCreateRequest): Promise<CourseSt
   };
 
   try {
-    const { pool, courseTable } = await getMysqlRuntime();
-    await pool.execute(
-      `INSERT INTO ${courseTable} (id, name, description, section_id, sort_order, created_at, updated_at, deleted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-      [course.id, course.name, course.description, course.sectionId, course.sortOrder, toMysqlDate(course.createdAt), toMysqlDate(course.updatedAt)]
-    );
+    const { pool, courseTable, mindMapTable, mindMapSnapshotTable, mindMapNodeTable } = await getMysqlRuntime();
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.execute(
+        `INSERT INTO ${courseTable} (id, name, description, section_id, sort_order, created_at, updated_at, deleted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+        [course.id, course.name, course.description, course.sectionId, course.sortOrder, toMysqlDate(course.createdAt), toMysqlDate(course.updatedAt)]
+      );
+      await createInitialMindMapForCourse(connection, {
+        courseId: course.id,
+        title: course.name,
+        mindMapTable,
+        mindMapSnapshotTable,
+        mindMapNodeTable,
+        createdAt: new Date(course.createdAt)
+      });
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
     const refreshed = await readCourseStore();
     const nextStore = normalizeCourseStore({ ...refreshed, activeCourseId: course.id });
     void writeLocalCourseStore(nextStore).catch((error) => {
@@ -4798,6 +6169,91 @@ function createSnapshotPayloadJson<T extends { updatedAt: string }>(snapshot: T,
 
 function createSnapshotContentHash<T extends { updatedAt: string }>(snapshot: T) {
   return createHash("sha256").update(JSON.stringify({ ...snapshot, updatedAt: "" })).digest("hex");
+}
+
+function createDefaultMindMapTheme() {
+  const fontFamily = "\"Microsoft YaHei\", \"微软雅黑\", Arial, sans-serif";
+  const fontSize = 20;
+  return {
+    template: "default",
+    config: {
+      paddingX: 20,
+      paddingY: 9,
+      lineWidth: 2,
+      lineColor: "#72a9d8",
+      lineDasharray: "none",
+      lineStyle: "curve",
+      lineRadius: 14,
+      rootLineKeepSameInCurve: true,
+      rootLineStartPositionKeepSameInCurve: true,
+      backgroundColor: "#fbfcfd",
+      backgroundImage: "none",
+      hoverRectColor: "#2f80c0",
+      hoverRectRadius: 8,
+      root: {
+        shape: "roundedRectangle",
+        fillColor: "#ffffff",
+        color: "#17466f",
+        fontFamily,
+        fontSize,
+        fontWeight: "bold",
+        borderColor: "#2f80c0",
+        borderWidth: 2,
+        borderRadius: 10,
+        hoverRectRadius: 10,
+        textAlign: "center"
+      },
+      second: {
+        shape: "roundedRectangle",
+        marginX: 112,
+        marginY: 48,
+        fillColor: "#eaf6ff",
+        color: "#17466f",
+        fontFamily,
+        fontSize,
+        fontWeight: "bold",
+        borderColor: "#91c8ef",
+        borderWidth: 1,
+        borderRadius: 9,
+        hoverRectRadius: 9,
+        textAlign: "center"
+      },
+      node: {
+        shape: "roundedRectangle",
+        marginX: 96,
+        marginY: 42,
+        fillColor: "#fff8ee",
+        color: "#425466",
+        fontFamily,
+        fontSize,
+        fontWeight: "normal",
+        borderColor: "#f0c37c",
+        borderWidth: 1,
+        borderRadius: 9,
+        hoverRectRadius: 9,
+        textAlign: "center"
+      }
+    }
+  };
+}
+
+function createInitialMindMapSnapshot(title: string, updatedAt: string): MindMapSnapshot {
+  return {
+    schemaVersion: AISTUDY_CORE_CONTRACT.schemaVersion,
+    editor: AISTUDY_CORE_CONTRACT.editors.mindMap,
+    editorVersion: "0.14.0-fix.2",
+    root: {
+      data: {
+        uid: "aistudy-node-1",
+        text: title || "未命名导图",
+        expand: true
+      },
+      children: []
+    },
+    layout: AISTUDY_CORE_CONTRACT.mindMap.defaultLayout,
+    theme: createDefaultMindMapTheme(),
+    updatedAt
+  };
 }
 
 function assertSnapshotRetentionLimit(value: number, label: string) {
@@ -5108,6 +6564,53 @@ async function upsertMindMapNodes(
       updatedAt
     ]);
   }
+}
+
+async function createInitialMindMapForCourse(
+  connection: PoolConnection,
+  input: {
+    courseId: string;
+    title: string;
+    mindMapTable: string;
+    mindMapSnapshotTable: string;
+    mindMapNodeTable: string;
+    createdAt: Date;
+  }
+) {
+  const updatedAt = input.createdAt.toISOString();
+  const mapId = createEntityId("mindmap");
+  const snapshotId = createEntityId("mmsnap");
+  const snapshot = createInitialMindMapSnapshot(input.title, updatedAt);
+  const nodes = flattenMindMapNodes(snapshot.root, null, 0, 0, "root", []);
+  const rootNodeId = nodes[0]?.nodeId ?? "root";
+  const payloadJson = createSnapshotPayloadJson(snapshot, updatedAt);
+  const payloadHash = createSnapshotContentHash(snapshot);
+  const byteSize = Buffer.byteLength(payloadJson, "utf8");
+  assertSnapshotStorageContract("Mind map", snapshot, byteSize, AISTUDY_CORE_CONTRACT.mindMap.maxSnapshotBytes);
+
+  await connection.execute(
+    `INSERT INTO ${input.mindMapTable}
+      (id, course_id, title, root_node_id, current_snapshot_id, node_count, created_at, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+    [mapId, input.courseId, input.title, rootNodeId, snapshotId, nodes.length, input.createdAt, input.createdAt]
+  );
+  await connection.execute(
+    `INSERT INTO ${input.mindMapSnapshotTable}
+      (id, mind_map_id, sequence_no, schema_version, editor, editor_version, payload_json, payload_hash, byte_size, created_at)
+     VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      snapshotId,
+      mapId,
+      AISTUDY_CORE_CONTRACT.schemaVersion,
+      AISTUDY_CORE_CONTRACT.editors.mindMap,
+      snapshot.editorVersion,
+      payloadJson,
+      payloadHash,
+      byteSize,
+      input.createdAt
+    ]
+  );
+  await upsertMindMapNodes(connection, input.mindMapNodeTable, input.courseId, mapId, nodes, input.createdAt);
 }
 
 async function softDeleteKnowledgeDocumentsForMissingNodes(
@@ -5524,6 +7027,785 @@ async function writeKnowledgeDocument(input: unknown): Promise<KnowledgeDocument
   }
 }
 
+function normalizeMcpText(value: unknown, fallback = "") {
+  return (typeof value === "string" ? value : fallback).trim().slice(0, 120);
+}
+
+async function resolveCourseForMcp(courseIdValue: unknown, required = false) {
+  const store = await readCourseStore();
+  const courseId = normalizeMcpText(courseIdValue, "");
+  const course = courseId ? store.courses.find((item) => item.id === courseId) ?? null : null;
+  if (courseId && !course) {
+    throw createAppError("APP_INVALID_ARGUMENT", "MCP course id is invalid.");
+  }
+  if (required && !course) {
+    throw createAppError("APP_INVALID_ARGUMENT", "MCP requires an explicit knowledge base.");
+  }
+  return { store, course };
+}
+
+async function summarizeMindMapForCourse(course: CourseRecord) {
+  const document = await readMindMapDocument(course.id);
+  return {
+    course,
+    mapId: document?.mapId ?? null,
+    title: document?.title ?? course.name,
+    nodeCount: document?.nodeCount ?? 0,
+    rootChildren: countMindMapChildren(document?.snapshot ?? null),
+    updatedAt: document?.updatedAt ?? null
+  };
+}
+
+async function getRequiredCourseForMcp(courseIdValue: unknown) {
+  const { course } = await resolveCourseForMcp(courseIdValue, true);
+  if (!course) {
+    throw createAppError("APP_INVALID_ARGUMENT", "MCP requires an explicit knowledge base.");
+  }
+  return course;
+}
+
+function countMindMapChildren(snapshot: MindMapSnapshot | null) {
+  if (!snapshot?.root || !Array.isArray(snapshot.root.children)) return 0;
+  return snapshot.root.children.length;
+}
+
+async function searchCurrentMindMapNodes(queryValue: unknown, courseIdValue: unknown) {
+  const query = normalizeMcpText(queryValue, "MCP") || "MCP";
+  const { course } = await resolveCourseForMcp(courseIdValue, false);
+  const runtime = await getMysqlRuntime();
+  if (!course) {
+    const [rows] = await runtime.pool.execute<McpNodeSearchRow[]>(
+      `SELECT n.course_id AS courseId, c.name AS courseName, n.mind_map_id AS mindMapId,
+              n.node_id AS nodeId, n.title, n.path_text AS pathText, n.depth, n.updated_at AS updatedAt
+       FROM ${runtime.mindMapNodeTable} n
+       LEFT JOIN ${runtime.courseTable} c ON c.id = n.course_id AND c.deleted_at IS NULL
+       WHERE n.deleted_at IS NULL
+         AND (n.title LIKE ? OR n.path_text LIKE ?)
+       ORDER BY n.updated_at DESC, n.depth ASC, n.position_index ASC
+       LIMIT 50`,
+      [`%${query}%`, `%${query}%`]
+    );
+    return {
+      scope: "all",
+      query,
+      nodes: rows.map((row) => ({
+        courseId: row.courseId,
+        courseName: row.courseName ?? "",
+        mapId: row.mindMapId,
+        nodeId: row.nodeId,
+        title: row.title,
+        path: row.pathText ?? row.title,
+        depth: Number(row.depth) || 0,
+        updatedAt: toIsoTimestamp(row.updatedAt)
+      }))
+    };
+  }
+
+  const map = await findMindMapByCourse(runtime.pool, runtime.mindMapTable, course.id);
+  if (!map) {
+    return { scope: "course", course, query, mapId: null, nodes: [] };
+  }
+
+  const [rows] = await runtime.pool.execute<McpNodeSearchRow[]>(
+    `SELECT course_id AS courseId, mind_map_id AS mindMapId, node_id AS nodeId, title, path_text AS pathText, depth, updated_at AS updatedAt
+     FROM ${runtime.mindMapNodeTable}
+     WHERE course_id = ?
+       AND mind_map_id = ?
+       AND deleted_at IS NULL
+       AND (title LIKE ? OR path_text LIKE ?)
+     ORDER BY depth ASC, position_index ASC
+     LIMIT 20`,
+    [course.id, map.id, `%${query}%`, `%${query}%`]
+  );
+
+  return {
+    scope: "course",
+    course,
+    query,
+    mapId: map.id,
+    nodes: rows.map((row) => ({
+      courseId: row.courseId,
+      courseName: course.name,
+      mapId: row.mindMapId,
+      nodeId: row.nodeId,
+      title: row.title,
+      path: row.pathText ?? row.title,
+      depth: Number(row.depth) || 0,
+      updatedAt: toIsoTimestamp(row.updatedAt)
+    }))
+  };
+}
+
+function createMcpMindMapNode(text: string): SimpleMindMapNode {
+  return {
+    data: {
+      uid: createEntityId("mcpnode"),
+      text,
+      expand: true,
+      richText: false,
+      isActive: false
+    },
+    children: []
+  };
+}
+
+function cloneMcpMindMapSnapshot(snapshot: MindMapSnapshot): MindMapSnapshot {
+  return JSON.parse(JSON.stringify(snapshot)) as MindMapSnapshot;
+}
+
+function readMcpNodeId(node: SimpleMindMapNode | null | undefined) {
+  const value = node?.data?.uid;
+  return typeof value === "string" && value ? value : null;
+}
+
+function findMcpNode(
+  root: SimpleMindMapNode,
+  nodeId: string,
+  parent: SimpleMindMapNode | null = null
+): { node: SimpleMindMapNode; parent: SimpleMindMapNode | null; index: number } | null {
+  if (readMcpNodeId(root) === nodeId) return { node: root, parent, index: 0 };
+  const children = Array.isArray(root.children) ? root.children : [];
+  for (let index = 0; index < children.length; index += 1) {
+    const found = findMcpNode(children[index], nodeId, root);
+    if (found) return { ...found, index: found.parent === root ? index : found.index };
+  }
+  return null;
+}
+
+function mcpNodeContains(root: SimpleMindMapNode, nodeId: string): boolean {
+  if (readMcpNodeId(root) === nodeId) return true;
+  return (Array.isArray(root.children) ? root.children : []).some((child) => mcpNodeContains(child, nodeId));
+}
+
+async function getMcpMindMapTarget(courseIdValue: unknown) {
+  const course = await getRequiredCourseForMcp(courseIdValue);
+  const document = await readMindMapDocument(course.id);
+  if (!document?.snapshot) {
+    throw createAppError("MINDMAP_REQUEST_INVALID", "Active course mind map is missing.");
+  }
+  return { course, document, snapshot: cloneMcpMindMapSnapshot(document.snapshot) };
+}
+
+async function saveMcpMindMapTarget(course: CourseRecord, document: MindMapDocument, snapshot: MindMapSnapshot) {
+  return writeMindMapDocument({
+    courseId: course.id,
+    mapId: document.mapId,
+    title: document.title,
+    snapshot: {
+      ...snapshot,
+      updatedAt: new Date().toISOString()
+    }
+  });
+}
+
+async function appendMcpMindMapNode(titleValue: unknown, courseIdValue: unknown) {
+  const course = await getRequiredCourseForMcp(courseIdValue);
+  const document = await readMindMapDocument(course.id);
+  if (!document?.snapshot) {
+    throw createAppError("MINDMAP_REQUEST_INVALID", "Active course mind map is missing.");
+  }
+
+  const title = normalizeMcpText(titleValue, "") || `MCP编辑调用记录 ${new Date().toLocaleString("zh-CN")}`;
+  const nextSnapshot = normalizeMindMapSnapshot(JSON.parse(JSON.stringify(document.snapshot)));
+  const root = nextSnapshot.root;
+  const children = Array.isArray(root.children) ? root.children : [];
+  root.children = children;
+  const node = createMcpMindMapNode(title);
+  children.push(node);
+  nextSnapshot.updatedAt = new Date().toISOString();
+
+  const saved = await writeMindMapDocument({
+    courseId: course.id,
+    mapId: document.mapId,
+    title: document.title,
+    snapshot: nextSnapshot
+  });
+
+  return {
+    course,
+    mapId: saved.mapId,
+    nodeId: readMcpNodeId(node),
+    nodeTitle: title,
+    nodeCount: saved.nodeCount,
+    updatedAt: saved.updatedAt
+  };
+}
+
+async function createMcpMindMapNodeCommand(args: Record<string, unknown>) {
+  const { course, document, snapshot } = await getMcpMindMapTarget(args.courseId);
+  const title = normalizeMcpText(args.title, "") || "新主题";
+  const parentNodeId = normalizeMcpText(args.parentNodeId, "");
+  const parent = parentNodeId ? findMcpNode(snapshot.root, parentNodeId)?.node : snapshot.root;
+  if (!parent) throw createAppError("APP_INVALID_ARGUMENT", "MCP parent node id is invalid.");
+  const parentChildren = Array.isArray(parent.children) ? parent.children as SimpleMindMapNode[] : [];
+  parent.children = parentChildren;
+  const node = createMcpMindMapNode(title);
+  const position = Number(args.position);
+  const insertAt = Number.isInteger(position) ? Math.min(Math.max(position, 0), parentChildren.length) : parentChildren.length;
+  parentChildren.splice(insertAt, 0, node);
+  const saved = await saveMcpMindMapTarget(course, document, snapshot);
+  return { course, mapId: saved.mapId, nodeId: readMcpNodeId(node), nodeTitle: title, nodeCount: saved.nodeCount, updatedAt: saved.updatedAt };
+}
+
+async function updateMcpMindMapNodeText(args: Record<string, unknown>) {
+  const { course, document, snapshot } = await getMcpMindMapTarget(args.courseId);
+  const nodeId = normalizeMcpText(args.nodeId, "");
+  const title = normalizeMcpText(args.title, "");
+  if (!nodeId || !title) throw createAppError("APP_INVALID_ARGUMENT", "MCP node id and title are required.");
+  const found = findMcpNode(snapshot.root, nodeId);
+  if (!found) throw createAppError("APP_INVALID_ARGUMENT", "MCP node id is invalid.");
+  found.node.data = { ...(found.node.data ?? {}), text: title };
+  const saved = await saveMcpMindMapTarget(course, document, snapshot);
+  return { course, mapId: saved.mapId, nodeId, nodeTitle: title, nodeCount: saved.nodeCount, updatedAt: saved.updatedAt };
+}
+
+async function moveMcpMindMapNode(args: Record<string, unknown>) {
+  const { course, document, snapshot } = await getMcpMindMapTarget(args.courseId);
+  const nodeId = normalizeMcpText(args.nodeId, "");
+  const targetParentNodeId = normalizeMcpText(args.targetParentNodeId, "");
+  if (!nodeId || !targetParentNodeId) throw createAppError("APP_INVALID_ARGUMENT", "MCP node id and target parent id are required.");
+  if (readMcpNodeId(snapshot.root) === nodeId) throw createAppError("APP_INVALID_ARGUMENT", "Root node cannot be moved.");
+  const found = findMcpNode(snapshot.root, nodeId);
+  const target = findMcpNode(snapshot.root, targetParentNodeId)?.node ?? null;
+  if (!found?.parent || !target) throw createAppError("APP_INVALID_ARGUMENT", "MCP node id is invalid.");
+  if (mcpNodeContains(found.node, targetParentNodeId)) throw createAppError("APP_INVALID_ARGUMENT", "Cannot move a node into its own child.");
+  const sourceChildren = Array.isArray(found.parent.children) ? found.parent.children : [];
+  sourceChildren.splice(found.index, 1);
+  const targetChildren = Array.isArray(target.children) ? target.children as SimpleMindMapNode[] : [];
+  target.children = targetChildren;
+  const position = Number(args.position);
+  const insertAt = Number.isInteger(position) ? Math.min(Math.max(position, 0), targetChildren.length) : targetChildren.length;
+  targetChildren.splice(insertAt, 0, found.node);
+  const saved = await saveMcpMindMapTarget(course, document, snapshot);
+  return { course, mapId: saved.mapId, nodeId, targetParentNodeId, nodeCount: saved.nodeCount, updatedAt: saved.updatedAt };
+}
+
+async function deleteMcpMindMapNode(args: Record<string, unknown>) {
+  const { course, document, snapshot } = await getMcpMindMapTarget(args.courseId);
+  const nodeId = normalizeMcpText(args.nodeId, "");
+  if (!nodeId) throw createAppError("APP_INVALID_ARGUMENT", "MCP node id is required.");
+  if (readMcpNodeId(snapshot.root) === nodeId) throw createAppError("APP_INVALID_ARGUMENT", "Root node cannot be deleted.");
+  const found = findMcpNode(snapshot.root, nodeId);
+  if (!found?.parent) throw createAppError("APP_INVALID_ARGUMENT", "MCP node id is invalid.");
+  const parentChildren = Array.isArray(found.parent.children) ? found.parent.children as SimpleMindMapNode[] : [];
+  found.parent.children = parentChildren.filter((child) => readMcpNodeId(child) !== nodeId);
+  const saved = await saveMcpMindMapTarget(course, document, snapshot);
+  return { course, mapId: saved.mapId, deletedNodeId: nodeId, nodeCount: saved.nodeCount, updatedAt: saved.updatedAt };
+}
+
+async function updateMcpMindMapNodeStyle(args: Record<string, unknown>) {
+  const { course, document, snapshot } = await getMcpMindMapTarget(args.courseId);
+  const nodeId = normalizeMcpText(args.nodeId, "");
+  if (!nodeId) throw createAppError("APP_INVALID_ARGUMENT", "MCP node id is required.");
+  const found = findMcpNode(snapshot.root, nodeId);
+  if (!found) throw createAppError("APP_INVALID_ARGUMENT", "MCP node id is invalid.");
+  const patch: Record<string, unknown> = {};
+  const color = normalizeMcpText(args.color, "");
+  if (color && /^#[0-9a-f]{6}$/i.test(color)) patch.color = color;
+  const fontSize = Number(args.fontSize);
+  if (Number.isInteger(fontSize) && fontSize >= 10 && fontSize <= 72) patch.fontSize = fontSize;
+  for (const key of ["fontWeight", "fontStyle", "textDecoration"] as const) {
+    if (typeof args[key] === "string") patch[key] = args[key];
+  }
+  const width = Number(args.textAutoWrapWidth);
+  if (Number.isInteger(width) && width >= 80 && width <= 1200) patch.textAutoWrapWidth = width;
+  found.node.data = { ...(found.node.data ?? {}), ...patch };
+  const saved = await saveMcpMindMapTarget(course, document, snapshot);
+  return { course, mapId: saved.mapId, nodeId, style: patch, nodeCount: saved.nodeCount, updatedAt: saved.updatedAt };
+}
+
+async function updateMcpMindMapLayout(args: Record<string, unknown>) {
+  const { course, document, snapshot } = await getMcpMindMapTarget(args.courseId);
+  const layout = normalizeMcpText(args.layout, "");
+  const allowed = new Set(["logicalStructure", "logicalStructureLeft", "mindMap", "organizationStructure", "catalogOrganization", "timeline", "verticalTimeline", "fishbone", "rightFishbone"]);
+  if (!allowed.has(layout)) throw createAppError("APP_INVALID_ARGUMENT", "MCP mind map layout is invalid.");
+  snapshot.layout = layout;
+  snapshot.view = undefined;
+  const saved = await saveMcpMindMapTarget(course, document, snapshot);
+  return { course, mapId: saved.mapId, layout, nodeCount: saved.nodeCount, updatedAt: saved.updatedAt };
+}
+
+async function readCurrentMindMapSummaryForMcp(courseIdValue: unknown) {
+  const { store, course } = await resolveCourseForMcp(courseIdValue, false);
+  if (course) {
+    return {
+      scope: "course",
+      ...(await summarizeMindMapForCourse(course))
+    };
+  }
+  const mindMaps = await Promise.all(store.courses.map((item) => summarizeMindMapForCourse(item)));
+  return {
+    scope: "all",
+    courseCount: store.courses.length,
+    mindMaps
+  };
+}
+
+async function resolveCourseLocatorForMcp(courseIdValue: unknown) {
+  const store = await readCourseStore();
+  const requestedCourseId = normalizeMcpText(courseIdValue, "");
+  if (!requestedCourseId) {
+    const locators = await Promise.all(store.courses.map(async (course) => {
+      const section = course.sectionId
+        ? store.sections.find((item) => item.id === course.sectionId) ?? null
+        : null;
+      const locatorPath = await createCourseLocatorFile({
+        courseId: course.id,
+        courseName: course.name,
+        courseDescription: course.description,
+        sectionId: course.sectionId,
+        sectionName: section?.name ?? ""
+      });
+      return { course, section, locatorPath };
+    }));
+    return {
+      scope: "all",
+      dataRoot: getAistudyDataRoot(),
+      locators,
+      usage: "未传 courseId 时会为全库生成定位文件；需要单库定位时传入 courseId。"
+    };
+  }
+  const course = store.courses.find((item) => item.id === requestedCourseId) ?? null;
+  if (!course) {
+    throw createAppError("APP_INVALID_ARGUMENT", "MCP course id is invalid.");
+  }
+
+  const section = course.sectionId
+    ? store.sections.find((item) => item.id === course.sectionId) ?? null
+    : null;
+  const locatorPath = await createCourseLocatorFile({
+    courseId: course.id,
+    courseName: course.name,
+    courseDescription: course.description,
+    sectionId: course.sectionId,
+    sectionName: section?.name ?? ""
+  });
+  return {
+    course,
+    section,
+    locatorPath,
+    dataRoot: getAistudyDataRoot(),
+    usage: "把 locatorPath 提供给 Codex/Claude/Cursor，即可快速定位 AIstudy 本地知识库边界。"
+  };
+}
+
+const MCP_DOCUMENT_STYLE = {
+  section: { size: 26, color: "#ea580c", bold: true },
+  subsection: { size: 26, color: "#7c3aed", bold: true },
+  article: { size: 24, color: "#2563eb", bold: true },
+  body: { size: 24, color: "#111827", bold: false }
+} as const;
+
+function stripMcpMarkdownHeading(line: string) {
+  return line.replace(/^#{1,6}\s+/, "").replace(/\*\*/g, "").trim();
+}
+
+function classifyMcpDocumentLine(line: string) {
+  const plain = stripMcpMarkdownHeading(line);
+  if (!plain) return null;
+  if (/^#{1,2}\s+/.test(line) || /^[一二三四五六七八九十]+[、.．]/.test(plain)) return "section";
+  if (/^#{3,6}\s+/.test(line) || /^[（(][一二三四五六七八九十\d]+[）)]、?/.test(plain)) return "subsection";
+  if (/^第[一二三四五六七八九十百千万\d]+条/.test(plain)) return "article";
+  if (plain.length <= 28 && /[:：]$/.test(plain)) return "subsection";
+  return "body";
+}
+
+function createMcpDocumentElement(value: string, kind: keyof typeof MCP_DOCUMENT_STYLE) {
+  return {
+    value,
+    ...MCP_DOCUMENT_STYLE[kind]
+  } as Record<string, unknown>;
+}
+
+function buildMcpDocumentElements(text: string): Record<string, unknown>[] {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const elements: Record<string, unknown>[] = [];
+  let bodyLines: string[] = [];
+  const flushBody = () => {
+    const body = bodyLines.join("\n").trim();
+    bodyLines = [];
+    if (!body) return;
+    elements.push(createMcpDocumentElement(`${body}\n\n`, "body"));
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushBody();
+      continue;
+    }
+    const kind = classifyMcpDocumentLine(rawLine);
+    if (kind && kind !== "body") {
+      flushBody();
+      elements.push(createMcpDocumentElement(`${stripMcpMarkdownHeading(rawLine)}\n\n`, kind));
+      continue;
+    }
+    bodyLines.push(line);
+  }
+  flushBody();
+  return elements.length > 0 ? elements : [createMcpDocumentElement("", "body")];
+}
+
+function createMcpTextDocumentSnapshot(text: string): KnowledgeDocumentSnapshot {
+  return {
+    schemaVersion: AISTUDY_CORE_CONTRACT.schemaVersion,
+    editor: AISTUDY_CORE_CONTRACT.editors.knowledgeDocument,
+    editorVersion: "mcp-text",
+    content: { main: buildMcpDocumentElements(text) },
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function extractMcpDocumentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(extractMcpDocumentText).join("");
+  if (!isRecord(value)) return "";
+  const own = typeof value.value === "string" ? value.value : "";
+  return own + Object.entries(value)
+    .filter(([key]) => key !== "value")
+    .map(([, child]) => extractMcpDocumentText(child))
+    .join("");
+}
+
+function appendMcpDocumentText(snapshot: KnowledgeDocumentSnapshot, text: string): KnowledgeDocumentSnapshot {
+  const next = JSON.parse(JSON.stringify(snapshot)) as KnowledgeDocumentSnapshot;
+  const content = isRecord(next.content) ? next.content as { main?: unknown[] } : {};
+  const main = Array.isArray(content.main) ? content.main.slice() : [];
+  const appended = buildMcpDocumentElements(text);
+  const last = main[main.length - 1];
+  const lastValue = isRecord(last) && typeof last.value === "string" ? last.value : "";
+  if (main.length > 0 && !lastValue.endsWith("\n\n")) {
+    main.push(createMcpDocumentElement("\n\n", "body"));
+  }
+  main.push(...appended);
+  return {
+    ...next,
+    content: { ...content, main },
+    updatedAt: new Date().toISOString()
+  } as KnowledgeDocumentSnapshot;
+}
+
+function applyMcpDocumentStyle(value: unknown, style: Record<string, unknown>): unknown {
+  if (Array.isArray(value)) return value.map((item) => applyMcpDocumentStyle(item, style));
+  if (!isRecord(value)) return value;
+  const next: Record<string, unknown> = { ...value };
+  if (typeof next.value === "string") {
+    Object.assign(next, style);
+  }
+  for (const [key, child] of Object.entries(next)) {
+    if (key === "value") continue;
+    next[key] = applyMcpDocumentStyle(child, style);
+  }
+  return next;
+}
+
+async function resolveMcpDocumentTarget(args: Record<string, unknown>) {
+  const course = await getRequiredCourseForMcp(args.courseId);
+  const mapId = normalizeMcpText(args.mindMapId, "") || (await readMindMapDocument(course.id))?.mapId || "";
+  const nodeId = normalizeMcpText(args.nodeId, "");
+  if (!mapId || !nodeId) throw createAppError("APP_INVALID_ARGUMENT", "MCP document target requires courseId and nodeId.");
+  return { course, mindMapId: mapId, nodeId };
+}
+
+async function listMcpNodeDocuments(args: Record<string, unknown>) {
+  const { store, course } = await resolveCourseForMcp(args.courseId, false);
+  const runtime = await getMysqlRuntime();
+  const courseIds = course ? [course.id] : store.courses.map((item) => item.id);
+  if (courseIds.length === 0) return { scope: "all", documents: [] };
+  const placeholders = courseIds.map(() => "?").join(", ");
+  const [rows] = await runtime.pool.execute<KnowledgeDocumentStatusRow[]>(
+    `SELECT id, course_id AS courseId, mind_map_id AS mindMapId, node_id AS nodeId, title,
+            current_byte_size AS currentByteSize, has_content AS hasContent, updated_at AS updatedAt
+     FROM ${runtime.knowledgeDocumentTable}
+     WHERE course_id IN (${placeholders}) AND deleted_at IS NULL
+     ORDER BY updated_at DESC
+     LIMIT 200`,
+    courseIds
+  );
+  return {
+    scope: course ? "course" : "all",
+    course: course ?? null,
+    documents: rows.map((row) => ({
+      courseId: row.courseId,
+      mindMapId: row.mindMapId,
+      nodeId: row.nodeId,
+      documentId: row.id,
+      title: row.title,
+      updatedAt: toIsoTimestamp(row.updatedAt),
+      byteSize: Number(row.currentByteSize) || 0,
+      hasContent: Boolean(Number(row.hasContent))
+    }))
+  };
+}
+
+async function readMcpNodeDocument(args: Record<string, unknown>) {
+  const target = await resolveMcpDocumentTarget(args);
+  const document = await readKnowledgeDocument({
+    courseId: target.course.id,
+    mindMapId: target.mindMapId,
+    nodeId: target.nodeId
+  });
+  return {
+    course: target.course,
+    mindMapId: target.mindMapId,
+    nodeId: target.nodeId,
+    document,
+    text: extractMcpDocumentText(document?.snapshot?.content ?? "")
+  };
+}
+
+async function writeMcpNodeDocument(args: Record<string, unknown>) {
+  const target = await resolveMcpDocumentTarget(args);
+  const title = normalizeMcpText(args.title, "") || "节点文档";
+  const snapshot = isRecord(args.snapshot)
+    ? normalizeKnowledgeDocumentSnapshot(args.snapshot)
+    : createMcpTextDocumentSnapshot(typeof args.text === "string" ? args.text : "");
+  const document = await writeKnowledgeDocument({
+    courseId: target.course.id,
+    mindMapId: target.mindMapId,
+    nodeId: target.nodeId,
+    title,
+    snapshot
+  });
+  return { course: target.course, document, text: extractMcpDocumentText(document.snapshot?.content ?? "") };
+}
+
+async function appendMcpNodeDocument(args: Record<string, unknown>) {
+  const target = await resolveMcpDocumentTarget(args);
+  const existing = await readKnowledgeDocument({
+    courseId: target.course.id,
+    mindMapId: target.mindMapId,
+    nodeId: target.nodeId
+  });
+  const text = typeof args.text === "string" ? args.text : "";
+  const snapshot = existing?.snapshot
+    ? appendMcpDocumentText(existing.snapshot, text)
+    : createMcpTextDocumentSnapshot(text);
+  const document = await writeKnowledgeDocument({
+    courseId: target.course.id,
+    mindMapId: target.mindMapId,
+    nodeId: target.nodeId,
+    title: normalizeMcpText(args.title, "") || existing?.title || "节点文档",
+    snapshot
+  });
+  return { course: target.course, document, text: extractMcpDocumentText(document.snapshot?.content ?? "") };
+}
+
+async function updateMcpNodeDocumentStyle(args: Record<string, unknown>) {
+  const target = await resolveMcpDocumentTarget(args);
+  const existing = await readKnowledgeDocument({
+    courseId: target.course.id,
+    mindMapId: target.mindMapId,
+    nodeId: target.nodeId
+  });
+  if (!existing?.snapshot) throw createAppError("APP_INVALID_ARGUMENT", "Node document is missing.");
+  const style: Record<string, unknown> = {};
+  const fontSize = Number(args.fontSize);
+  if (Number.isInteger(fontSize) && fontSize >= 10 && fontSize <= 72) style.size = fontSize;
+  const color = normalizeMcpText(args.color, "");
+  if (color && /^#[0-9a-f]{6}$/i.test(color)) style.color = color;
+  if (typeof args.bold === "boolean") style.bold = args.bold;
+  if (typeof args.italic === "boolean") style.italic = args.italic;
+  if (typeof args.underline === "boolean") style.underline = args.underline;
+  const snapshot = {
+    ...existing.snapshot,
+    content: applyMcpDocumentStyle(existing.snapshot.content, style),
+    updatedAt: new Date().toISOString()
+  } as KnowledgeDocumentSnapshot;
+  const document = await writeKnowledgeDocument({
+    courseId: target.course.id,
+    mindMapId: target.mindMapId,
+    nodeId: target.nodeId,
+    title: existing.title,
+    snapshot
+  });
+  return { course: target.course, document, style };
+}
+
+function toMcpChromePortInfo(status: ChromePortStatus) {
+  return {
+    platformId: status.id,
+    name: status.name,
+    port: status.port,
+    defaultUrl: status.loginUrl,
+    hostKeyword: status.hostKeyword,
+    connected: status.connected,
+    pageDetected: status.pageDetected,
+    authenticated: status.authenticated,
+    saved: status.saved,
+    statusText: status.statusText,
+    detectedUrl: status.detectedUrl,
+    lastCheckedAt: status.lastCheckedAt,
+    devtoolsListUrl: `http://127.0.0.1:${status.port}/json/list`,
+    openTool: "chrome_port_open_page",
+    openArgs: { platformId: status.id }
+  };
+}
+
+async function runChromePortMcpTool(toolId: string, args: Record<string, unknown>) {
+  if (toolId === "chrome_ports_status") {
+    const statuses = await getChromePortStatuses();
+    return {
+      ports: statuses.map(toMcpChromePortInfo),
+      usage: {
+        first: "chrome_ports_status",
+        open: "chrome_port_open_page({ platformId, url? })",
+        platformIds: chromePortDefinitions.map((platform) => platform.id)
+      }
+    };
+  }
+  if (toolId === "chrome_port_open_page") {
+    const result = await openChromePortPage(args.platformId, args.url);
+    return {
+      opened: result.status.connected,
+      openedUrl: result.openedUrl || "",
+      message: result.message,
+      port: toMcpChromePortInfo(result.status)
+    };
+  }
+  throw createAppError("APP_INVALID_ARGUMENT", "Unknown Chrome port MCP tool.");
+}
+
+async function runAdvancedMcpTool(toolId: string, args: Record<string, unknown>) {
+  if (toolId === "create_course") return createCourseCommand(args as CourseCreateRequest);
+  if (toolId === "rename_course") return renameCourseCommand({ id: args.courseId, name: args.name, description: args.description });
+  if (toolId === "move_course") {
+    if (args.beforeCourseId !== undefined) return reorderCourseCommand({ id: args.courseId, sectionId: args.sectionId, beforeCourseId: args.beforeCourseId });
+    return moveCourseCommand({ id: args.courseId, sectionId: args.sectionId });
+  }
+  if (toolId === "delete_course") return deleteCourseCommand(args.courseId);
+  if (toolId === "create_course_section") return createCourseSectionCommand({ name: args.name });
+  if (toolId === "rename_course_section") return renameCourseSectionCommand({ id: args.sectionId, name: args.name });
+  if (toolId === "move_course_section") return reorderCourseSectionCommand({ id: args.sectionId, beforeSectionId: args.beforeSectionId });
+  if (toolId === "delete_course_section") return deleteCourseSectionCommand(args.sectionId);
+  if (toolId === "create_mindmap_node") return createMcpMindMapNodeCommand(args);
+  if (toolId === "update_mindmap_node_text") return updateMcpMindMapNodeText(args);
+  if (toolId === "move_mindmap_node") return moveMcpMindMapNode(args);
+  if (toolId === "delete_mindmap_node") return deleteMcpMindMapNode(args);
+  if (toolId === "update_mindmap_node_style") return updateMcpMindMapNodeStyle(args);
+  if (toolId === "update_mindmap_layout") return updateMcpMindMapLayout(args);
+  if (toolId === "list_node_documents") return listMcpNodeDocuments(args);
+  if (toolId === "read_node_document") return readMcpNodeDocument(args);
+  if (toolId === "write_node_document") return writeMcpNodeDocument(args);
+  if (toolId === "append_node_document") return appendMcpNodeDocument(args);
+  if (toolId === "update_node_document_style") return updateMcpNodeDocumentStyle(args);
+  throw createAppError("APP_INVALID_ARGUMENT", "Unknown MCP tool.");
+}
+
+const mcpController = createMcpController({
+  app,
+  clipboard,
+  getMainWindow: () => mainWindow,
+  createAppError,
+  getAistudyDataRoot,
+  readCourseStore,
+  readCurrentMindMapSummary: readCurrentMindMapSummaryForMcp,
+  searchCurrentMindMapNodes,
+  appendMindMapNode: appendMcpMindMapNode,
+  runAdvancedTool: (toolId, args) => runAdvancedMcpTool(toolId, args),
+  runChromePortTool: (toolId, args) => runChromePortMcpTool(toolId, args),
+  diagnoseRuntime,
+  resolveCourseLocator: resolveCourseLocatorForMcp
+});
+
+const mcpRemoteAccessController = createMcpRemoteAccessController({
+  clipboard,
+  userDataRoot: aistudyUserDataRoot,
+  handleJsonRpcRequest: (request) => mcpController.handleJsonRpcRequest(request),
+  runTrustedTool: (name, args) => mcpController.runTrustedTool(name, args),
+  onStateChanged: (state) => {
+    if (!mainWindow || mainWindow.webContents.isDestroyed()) return;
+    mainWindow.webContents.send("mcp:remote-state-changed", state);
+  },
+  onDataChanged: (change) => {
+    if (!mainWindow || mainWindow.webContents.isDestroyed()) return;
+    mainWindow.webContents.send("mcp:data-changed", change);
+  }
+});
+
+type McpDataChangeEvent = {
+  id: string;
+  source?: string;
+  tool: string;
+  kind: "course" | "mindmap" | "document" | "chrome" | "unknown";
+  courseId: string | null;
+  nodeId: string | null;
+  changedAt: string;
+  message: string;
+};
+
+let mcpEventWatcher: FSWatcher | null = null;
+const handledMcpEventIds = new Set<string>();
+
+function getMcpEventDir() {
+  return getAistudyDataPath("runtime", "mcp-events");
+}
+
+function normalizeMcpDataChangeEvent(value: unknown): McpDataChangeEvent | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<McpDataChangeEvent>;
+  const id = typeof candidate.id === "string" && candidate.id.trim() ? candidate.id.trim() : "";
+  const tool = typeof candidate.tool === "string" && candidate.tool.trim() ? candidate.tool.trim() : "";
+  const allowedKinds: McpDataChangeEvent["kind"][] = ["course", "mindmap", "document", "chrome", "unknown"];
+  const kind = allowedKinds.includes(candidate.kind as McpDataChangeEvent["kind"]) ? candidate.kind as McpDataChangeEvent["kind"] : "unknown";
+  if (!id || !tool) return null;
+  return {
+    id,
+    source: typeof candidate.source === "string" ? candidate.source : "stdio",
+    tool,
+    kind,
+    courseId: typeof candidate.courseId === "string" && candidate.courseId.trim() ? candidate.courseId.trim() : null,
+    nodeId: typeof candidate.nodeId === "string" && candidate.nodeId.trim() ? candidate.nodeId.trim() : null,
+    changedAt: typeof candidate.changedAt === "string" && candidate.changedAt.trim() ? candidate.changedAt.trim() : new Date().toISOString(),
+    message: typeof candidate.message === "string" ? candidate.message : "MCP 外部调用已完成"
+  };
+}
+
+function emitMcpDataChange(change: McpDataChangeEvent) {
+  if (!mainWindow || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send("mcp:data-changed", change);
+}
+
+async function consumeMcpEventFile(filePath: string) {
+  if (!filePath.toLowerCase().endsWith(".json")) return;
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const change = normalizeMcpDataChangeEvent(JSON.parse(raw));
+    if (!change || handledMcpEventIds.has(change.id)) return;
+    handledMcpEventIds.add(change.id);
+    if (handledMcpEventIds.size > 500) {
+      const first = handledMcpEventIds.values().next().value;
+      if (first) handledMcpEventIds.delete(first);
+    }
+    emitMcpDataChange(change);
+    await fs.unlink(filePath).catch(() => undefined);
+  } catch {
+    // The file may still be moving into place; fs.watch will fire again or the next launch will recover it.
+  }
+}
+
+function startMcpEventBridge() {
+  const eventDir = getMcpEventDir();
+  mkdirSync(eventDir, { recursive: true });
+  void fs.readdir(eventDir)
+    .then((files) => Promise.all(files.filter((fileName) => fileName.toLowerCase().endsWith(".json")).map((fileName) => consumeMcpEventFile(path.join(eventDir, fileName)))))
+    .catch(() => undefined);
+
+  mcpEventWatcher?.close();
+  mcpEventWatcher = watch(eventDir, (_eventType, fileName) => {
+    if (!fileName || !String(fileName).toLowerCase().endsWith(".json")) return;
+    const eventPath = path.join(eventDir, String(fileName));
+    setTimeout(() => {
+      void consumeMcpEventFile(eventPath);
+    }, 60);
+  });
+}
+
+function stopMcpEventBridge() {
+  mcpEventWatcher?.close();
+  mcpEventWatcher = null;
+}
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1360,
@@ -5578,16 +7860,22 @@ function createMainWindow() {
   }
 }
 
+if (process.argv.includes("--aistudy-mcp")) {
+  void mcpController.startStdioServer();
+} else {
 app.whenReady().then(() => {
   createMainWindow();
   warmMysqlRuntime();
+  startMcpEventBridge();
+  void mcpRemoteAccessController.restore();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
     }
   });
-});
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -5596,6 +7884,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
+  stopMcpEventBridge();
+  void mcpRemoteAccessController.close();
   void mysqlRuntime?.pool.end();
 });
 
@@ -5693,13 +7983,58 @@ ipcMain.handle("knowledge-documents:list-statuses", withUserFacingError("knowled
 
 ipcMain.handle("knowledge-documents:save", withUserFacingError("knowledge-documents:save", "文档保存没有完成，请稍后再试。", (_event, request) => writeKnowledgeDocument(request)));
 
+ipcMain.handle("mcp:state", withUserFacingError("mcp:state", "MCP 状态暂时无法读取。", () => mcpController.getState()));
+
+ipcMain.handle("mcp:set-enabled", withUserFacingError("mcp:set-enabled", "MCP 管控状态没有保存。", (_event, input) => mcpController.setControl(input)));
+
+ipcMain.handle("mcp:set-tool-enabled", withUserFacingError("mcp:set-tool-enabled", "MCP 工具状态没有保存。", (_event, input) => mcpController.setToolEnabled(input)));
+
+ipcMain.handle("mcp:run-tool", withUserFacingError("mcp:run-tool", "MCP 调用没有完成。", (_event, input) => mcpController.runTool(input)));
+
+ipcMain.handle("mcp:remote-state", withUserFacingError("mcp:remote-state", "内网访问状态暂时无法读取。", () => mcpRemoteAccessController.getState()));
+
+ipcMain.handle("mcp:remote-set-enabled", withUserFacingError("mcp:remote-set-enabled", "内网访问状态没有保存。", (_event, input) => mcpRemoteAccessController.setEnabled(input)));
+
+ipcMain.handle("mcp:remote-set-permissions", withUserFacingError("mcp:remote-set-permissions", "内网访问权限没有保存。", (_event, input) => mcpRemoteAccessController.setPermissions(input)));
+
+ipcMain.handle("mcp:remote-refresh", withUserFacingError("mcp:remote-refresh", "内网访问检测没有完成。", () => mcpRemoteAccessController.refresh()));
+
+ipcMain.handle("mcp:remote-copy", withUserFacingError("mcp:remote-copy", "内网连接信息没有复制。", () => mcpRemoteAccessController.copyConnectionInfo()));
+
 ipcMain.handle("chrome-ports:status", withUserFacingError("chrome-ports:status", "端口状态读取没有完成，请稍后再试。", () => getChromePortStatuses()));
 
 ipcMain.handle("chrome-ports:open-login", withUserFacingError("chrome-ports:open-login", "登录窗口没有打开，请稍后再试。", (_event, platformId) => openChromePortLogin(platformId)));
 
+ipcMain.handle("chrome-ports:open-page", withUserFacingError("chrome-ports:open-page", "页面没有打开，请稍后再试。", (_event, input) => {
+  const request = input && typeof input === "object" ? input as { platformId?: unknown; url?: unknown } : {};
+  return openChromePortPage(request.platformId, request.url);
+}));
+
+ipcMain.handle(
+  "information-collection:bilibili-collect",
+  withUserFacingError("information-collection:bilibili-collect", "信息采集没有完成，请稍后再试。", (_event, input) => collectBilibiliInformation(input))
+);
+
+ipcMain.handle(
+  "information-collection:bilibili-process",
+  withUserFacingError("information-collection:bilibili-process", "视频处理没有完成，请稍后再试。", (_event, input) => processBilibiliVideo(input))
+);
+
+ipcMain.handle(
+  "information-collection:tool-status",
+  withUserFacingError("information-collection:tool-status", "采集工具状态没有读取到。", () => readInformationToolStatus())
+);
+
+ipcMain.handle(
+  "information-collection:open-bilibili",
+  withUserFacingError("information-collection:open-bilibili", "B站页面没有打开，请稍后再试。", (_event, input) => openBilibiliCollectionTarget(input))
+);
+
 ipcMain.handle("error-logs:list", withUserFacingError("error-logs:list", "报错日志暂时无法读取。", (_event, limit) => listAppErrorLogs(limit)));
 
 ipcMain.handle("runtime:diagnose", withUserFacingError("runtime:diagnose", "环境检查没有完成，请稍后再试。", () => diagnoseRuntime()));
+
+ipcMain.handle("runtime:copy-diagnostic-report", withUserFacingError("runtime:copy-diagnostic-report", "诊断报告暂时无法复制。", () => copyRuntimeDiagnosticReport()));
 
 ipcMain.handle("runtime:open-data-root", withUserFacingError("runtime:open-data-root", "数据目录暂时无法打开。", () => openAistudyDataRoot()));
 

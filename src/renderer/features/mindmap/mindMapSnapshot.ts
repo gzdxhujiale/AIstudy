@@ -219,13 +219,14 @@ export function normalizeMindMapTree(root: SimpleMindMapNode | null | undefined,
 
   const walk = (node: SimpleMindMapNode, path: string, titleFallback: string): SimpleMindMapNode => {
     const data = node.data && typeof node.data === "object" ? node.data : { text: titleFallback };
+    const { customLeft: _customLeft, customTop: _customTop, ...stableData } = data;
     const uid = normalizeNodeId(data.uid, usedIds, path);
     const text = typeof data.text === "string" && data.text.trim() ? data.text : titleFallback;
 
     return {
       ...node,
       data: {
-        ...data,
+        ...stableData,
         uid,
         text
       },
@@ -240,13 +241,25 @@ export function normalizeMindMapTree(root: SimpleMindMapNode | null | undefined,
 
 export function countNodes(root: SimpleMindMapNode | null | undefined): number {
   if (!root) return 0;
-  return 1 + getMindMapChildren(root).reduce((sum, child) => sum + countNodes(child), 0);
+  let count = 0;
+  const stack: SimpleMindMapNode[] = [root];
+
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) continue;
+    count += 1;
+    const children = getMindMapChildren(node);
+    for (let index = 0; index < children.length; index += 1) {
+      stack.push(children[index]);
+    }
+  }
+
+  return count;
 }
 
 export function buildMindMapOutline(root: SimpleMindMapNode | null | undefined): MindMapOutlineItem[] {
   if (!root) return [];
 
-  const sourceRoot = normalizeMindMapTree(root);
   const walk = (
     node: SimpleMindMapNode,
     level: number,
@@ -286,7 +299,7 @@ export function buildMindMapOutline(root: SimpleMindMapNode | null | undefined):
 
   return [
     walk(
-      sourceRoot,
+      root,
       MIND_MAP_CATALOG_RELATION.rootLevel,
       MIND_MAP_CATALOG_RELATION.rootPath,
       null,

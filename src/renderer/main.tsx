@@ -5,24 +5,41 @@ import {
   Bot,
   Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  ClipboardList,
   Download,
   ExternalLink,
   FileText,
   Folder,
   GitBranch,
   Globe2,
+  Keyboard,
   Pause,
   Play,
+  PlugZap,
   RefreshCw,
   Settings,
+  SlidersHorizontal,
   X
 } from "lucide-react";
 import { AiAssistantPanel } from "./features/assistant/AiAssistantPanel";
 import { ChromePortManager } from "./features/chromePorts/ChromePortManager";
+import { InformationCollectionPanel } from "./features/collection/InformationCollectionPanel";
 import { CourseSidebar } from "./features/course/CourseSidebar";
 import { courseApi } from "./features/course/courseService";
 import type { Course, CourseSection, CourseStore, CourseSyncStatus } from "./features/course/courseTypes";
+import { McpControlPanel } from "./features/mcp/McpControlPanel";
 import { MindMapCatalog } from "./features/mindmap/MindMapCatalog";
+import {
+  formatMindMapShortcutFromEvent,
+  MIND_MAP_BRANCH_SHORTCUTS,
+  readMindMapShortcutSettings,
+  resetMindMapShortcutSettings,
+  writeMindMapShortcutSettings,
+  type MindMapBranchShortcutCommand,
+  type MindMapShortcutSettings
+} from "./features/mindmap/mindMapShortcutSettings";
 import {
   MindMapWorkspace,
   type WorkspaceEditorMode,
@@ -41,6 +58,16 @@ declare global {
     };
   }
 }
+
+type McpDataChange = {
+  id: string;
+  tool: string;
+  kind: "course" | "mindmap" | "document" | "chrome" | "unknown";
+  courseId: string | null;
+  nodeId: string | null;
+  changedAt: string;
+  message: string;
+};
 
 type UpdateManagerInfo = {
   appVersion: string;
@@ -118,6 +145,11 @@ type RuntimeDiagnosticResult = {
   items: RuntimeDiagnosticItem[];
 };
 
+type RuntimeDiagnosticReportCopyResult = {
+  copied: boolean;
+  diagnostic: RuntimeDiagnosticResult;
+};
+
 type AppErrorBoundaryState = {
   error: Error | null;
 };
@@ -147,8 +179,9 @@ class AppErrorBoundary extends React.Component<React.PropsWithChildren, AppError
 }
 
 type CourseDialogMode = "create" | "edit";
-type AppSection = "knowledge" | "assistant" | "chromePorts";
-type SettingsPage = "runtime" | "updates" | "errorLogs";
+type AppSection = "knowledge" | "collection" | "assistant" | "chromePorts";
+type DetailPaneMode = "catalog" | "format";
+type SettingsPage = "runtime" | "mcp" | "shortcuts" | "updates" | "errorLogs";
 
 declare global {
   interface Window {
@@ -168,6 +201,7 @@ declare global {
     };
     aistudyRuntime?: {
       diagnose: () => Promise<RuntimeDiagnosticResult>;
+      copyDiagnosticReport: () => Promise<RuntimeDiagnosticReportCopyResult>;
       openDataRoot: () => Promise<boolean>;
     };
   }
@@ -224,6 +258,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
   const [isChecking, setIsChecking] = React.useState(false);
   const [isDownloading, setIsDownloading] = React.useState(false);
   const [lastCheckedAt, setLastCheckedAt] = React.useState("");
+  const [shortcutSettings, setShortcutSettings] = React.useState<MindMapShortcutSettings>(() => readMindMapShortcutSettings());
 
   React.useEffect(() => {
     loadUpdateInfo()
@@ -279,6 +314,23 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
         setRuntimeMessage("环境检查没有完成，请稍后再试。");
       })
       .finally(() => setIsCheckingRuntime(false));
+  }, []);
+
+  const copyRuntimeDiagnosticReport = React.useCallback(() => {
+    if (!window.aistudyRuntime) {
+      setRuntimeMessage("诊断报告暂时不可用。");
+      return;
+    }
+
+    setRuntimeMessage("正在生成诊断报告...");
+    window.aistudyRuntime.copyDiagnosticReport()
+      .then((result) => {
+        setRuntimeMessage("诊断报告已复制，可以直接发给协助排查的人。");
+        setDiagnosticResult(result.diagnostic);
+      })
+      .catch(() => {
+        setRuntimeMessage("诊断报告暂时无法复制，请稍后再试。");
+      });
   }, []);
 
   React.useEffect(() => {
@@ -430,6 +482,31 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
       });
   }, [downloadResult]);
 
+  const updateShortcut = React.useCallback((command: MindMapBranchShortcutCommand, shortcut: string) => {
+    setShortcutSettings((current) => {
+      const next = { ...current, [command]: shortcut };
+      writeMindMapShortcutSettings(next);
+      return next;
+    });
+  }, []);
+
+  const captureShortcut = React.useCallback((command: MindMapBranchShortcutCommand, event: React.KeyboardEvent<HTMLInputElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Backspace" || event.key === "Delete") {
+      updateShortcut(command, "");
+      return;
+    }
+    const shortcut = formatMindMapShortcutFromEvent(event);
+    if (shortcut) {
+      updateShortcut(command, shortcut);
+    }
+  }, [updateShortcut]);
+
+  const resetAllShortcuts = React.useCallback(() => {
+    setShortcutSettings(resetMindMapShortcutSettings());
+  }, []);
+
   const updateStateLabel = checkResult ? (checkResult.hasUpdate ? "发现新版本" : "已是最新") : "待检测";
   const updateStateClass = checkResult ? (checkResult.hasUpdate ? "available" : "latest") : "idle";
   const updateHeadline = checkResult
@@ -453,7 +530,15 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
       ? `${formatFileSize(visibleDownloadProgress.downloadedBytes)} / ${formatFileSize(visibleDownloadProgress.totalBytes)}`
       : formatFileSize(visibleDownloadProgress.downloadedBytes))
     : "";
-  const settingsPageTitle = activePage === "runtime" ? "环境检查" : activePage === "updates" ? "更新管理" : "报错日志";
+  const settingsPageTitle = activePage === "runtime"
+    ? "环境检查"
+    : activePage === "mcp"
+      ? "MCP 控制台"
+      : activePage === "shortcuts"
+        ? "快捷键"
+        : activePage === "updates"
+          ? "更新管理"
+          : "报错日志";
 
   return (
     <div className="settings-backdrop" role="presentation">
@@ -466,6 +551,14 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
           <button className={activePage === "runtime" ? "settings-nav-item active" : "settings-nav-item"} type="button" onClick={() => setActivePage("runtime")}>
             <CheckCircle2 size={16} />
             <span>环境检查</span>
+          </button>
+          <button className={activePage === "mcp" ? "settings-nav-item active" : "settings-nav-item"} type="button" onClick={() => setActivePage("mcp")}>
+            <PlugZap size={16} />
+            <span>MCP 控制台</span>
+          </button>
+          <button className={activePage === "shortcuts" ? "settings-nav-item active" : "settings-nav-item"} type="button" onClick={() => setActivePage("shortcuts")}>
+            <Keyboard size={16} />
+            <span>快捷键</span>
           </button>
           <button className={activePage === "updates" ? "settings-nav-item active" : "settings-nav-item"} type="button" onClick={() => setActivePage("updates")}>
             <GitBranch size={16} />
@@ -493,9 +586,18 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
                 <div className="settings-section-heading">
                   <div>
                     <h3>一键检查新机器运行环境</h3>
-                    <p>检查数据目录、数据库、Chrome、AI 端口和更新服务。缺少的能力只会提示处理方式，不影响核心编辑区打开。</p>
+                    <p>检查数据目录、数据库、Chrome、端口、信息采集工具和更新服务。缺少的能力只会提示处理方式，不影响核心编辑区打开。</p>
                   </div>
                   <div className="runtime-check-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={copyRuntimeDiagnosticReport}
+                      disabled={isCheckingRuntime}
+                    >
+                      <FileText size={15} />
+                      复制报告
+                    </button>
                     <button
                       className="secondary-button"
                       type="button"
@@ -546,6 +648,33 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
                   <strong>{isCheckingRuntime ? "正在检查环境" : "点击一键检查"}</strong>
                 </div>
               )}
+            </div>
+          ) : activePage === "mcp" ? (
+            <McpControlPanel />
+          ) : activePage === "shortcuts" ? (
+            <div className="shortcut-settings-panel">
+              <section className="shortcut-settings-list" aria-label="导图快捷键">
+                {MIND_MAP_BRANCH_SHORTCUTS.map((item) => (
+                  <article className="shortcut-settings-row" key={item.command}>
+                    <div className="shortcut-settings-main">
+                      <strong>{item.label}</strong>
+                    </div>
+                    <input
+                      value={shortcutSettings[item.command] || "未设置"}
+                      readOnly
+                      onKeyDown={(event) => captureShortcut(item.command, event)}
+                      onFocus={(event) => event.currentTarget.select()}
+                      aria-label={`${item.label}快捷键`}
+                    />
+                    <button type="button" onClick={() => updateShortcut(item.command, item.defaultShortcut)}>
+                      恢复
+                    </button>
+                  </article>
+                ))}
+              </section>
+              <div className="shortcut-settings-actions">
+                <button type="button" onClick={resetAllShortcuts}>全部恢复</button>
+              </div>
             </div>
           ) : activePage === "updates" ? (
           <div className="update-panel">
@@ -741,6 +870,19 @@ function App() {
   const [modeChangeRequest, setModeChangeRequest] = React.useState<WorkspaceModeChangeRequest | null>(null);
   const [nodeSelectionRequest, setNodeSelectionRequest] = React.useState<WorkspaceNodeSelectionRequest | null>(null);
   const [activeSection, setActiveSection] = React.useState<AppSection>("knowledge");
+  const [isLibraryPaneCollapsed, setIsLibraryPaneCollapsed] = React.useState(false);
+  const [isCatalogPaneCollapsed, setIsCatalogPaneCollapsed] = React.useState(false);
+  const [detailPaneMode, setDetailPaneMode] = React.useState<DetailPaneMode>("catalog");
+  const [externalContentRevision, setExternalContentRevision] = React.useState(0);
+
+  const openDocumentFormatPane = React.useCallback(() => {
+    setDetailPaneMode("format");
+    setIsCatalogPaneCollapsed(false);
+  }, []);
+
+  const closeDocumentFormatPane = React.useCallback(() => {
+    setDetailPaneMode("catalog");
+  }, []);
 
   React.useEffect(() => {
     return window.aistudyLifecycle?.onBeforeClose(() => drainBeforeCloseSaves());
@@ -748,12 +890,39 @@ function App() {
 
   React.useEffect(() => startCoreFeatureWarmup(), []);
 
+  React.useEffect(() => {
+    if (workspaceEditorMode === "mindmap" && detailPaneMode === "format") {
+      setDetailPaneMode("catalog");
+    }
+  }, [detailPaneMode, workspaceEditorMode]);
+
   function applyCourseStore(store: CourseStore) {
     setCourseSections(store.sections ?? []);
     setCourses(store.courses);
     setActiveCourseId(store.activeCourseId);
     setHasLoadedCourseStore(true);
   }
+
+  React.useEffect(() => {
+    if (!window.aistudyMcp?.onDataChanged) return undefined;
+    return window.aistudyMcp.onDataChanged((change) => {
+      if (change.kind === "course") {
+        setCourseSyncStatus((current) => ({ ...current, state: "saving" }));
+        courseApi.load()
+          .then((store) => {
+            applyCourseStore(store);
+            void refreshCourseSyncStatus();
+          })
+          .catch(() => {
+            setCourseSyncStatus({ state: "attention", pendingCount: 1 });
+          });
+      }
+
+      if (change.kind === "course" || change.kind === "mindmap" || change.kind === "document") {
+        setExternalContentRevision(Date.now());
+      }
+    });
+  }, []);
 
   async function refreshCourseSyncStatus() {
     try {
@@ -916,6 +1085,7 @@ function App() {
 
   function requestWorkspaceMode(mode: WorkspaceEditorMode) {
     if (mode === workspaceEditorMode) return;
+    if (mode === "mindmap") setDetailPaneMode("catalog");
     setModeChangeRequest({ mode, nonce: Date.now() });
   }
 
@@ -940,6 +1110,16 @@ function App() {
             onClick={() => setActiveSection("knowledge")}
           >
             <Folder size={19} strokeWidth={1.9} />
+          </button>
+          <button
+            className={activeSection === "collection" ? "nav-button active" : "nav-button"}
+            title="信息采集"
+            aria-label="信息采集"
+            aria-current={activeSection === "collection" ? "page" : undefined}
+            type="button"
+            onClick={() => setActiveSection("collection")}
+          >
+            <ClipboardList size={19} strokeWidth={1.9} />
           </button>
           <button
             className={activeSection === "chromePorts" ? "nav-button active" : "nav-button"}
@@ -968,7 +1148,25 @@ function App() {
       </aside>
 
       {activeSection === "knowledge" ? (
-      <main className="study-layout">
+      <main className={`study-layout${isLibraryPaneCollapsed ? " library-collapsed" : ""}${isCatalogPaneCollapsed ? " catalog-collapsed" : ""}`}>
+        <button
+          className="pane-collapse-button library-toggle"
+          title={isLibraryPaneCollapsed ? "展开知识库" : "收起知识库"}
+          aria-label={isLibraryPaneCollapsed ? "展开知识库" : "收起知识库"}
+          type="button"
+          onClick={() => setIsLibraryPaneCollapsed((value) => !value)}
+        >
+          {isLibraryPaneCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+        </button>
+        <button
+          className="pane-collapse-button catalog-toggle-button"
+          title={isCatalogPaneCollapsed ? "展开目录" : "收起目录"}
+          aria-label={isCatalogPaneCollapsed ? "展开目录" : "收起目录"}
+          type="button"
+          onClick={() => setIsCatalogPaneCollapsed((value) => !value)}
+        >
+          {isCatalogPaneCollapsed ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
+        </button>
         <CourseSidebar
           sections={courseSections}
           courses={courses}
@@ -1021,24 +1219,50 @@ function App() {
               courseId={activeCourse?.id ?? null}
               courseName={activeCourse?.name ?? "New mind map"}
               editorMode={workspaceEditorMode}
+              externalChangeRevision={externalContentRevision}
               modeChangeRequest={modeChangeRequest}
               nodeSelectionRequest={nodeSelectionRequest}
               onEditorModeChange={setWorkspaceEditorMode}
               onOutlineChanged={setMindMapOutline}
               onNodeSelectedChanged={setSelectedMindMapNode}
+              isCatalogPaneCollapsed={isCatalogPaneCollapsed}
+              documentDetailPaneMode={detailPaneMode}
+              onOpenDocumentFormatPane={openDocumentFormatPane}
+              onCloseDocumentFormatPane={closeDocumentFormatPane}
             />
           </div>
         </section>
 
-        <aside className="detail-pane" aria-label="目录">
+        <aside className="detail-pane" aria-label={workspaceEditorMode === "word" && detailPaneMode === "format" ? "排版" : "目录"}>
           <div className="detail-heading">
             <div>
-              <p className="section-kicker">导图</p>
-              <h2>目录</h2>
+              <h2>{workspaceEditorMode === "word" && detailPaneMode === "format" ? "排版" : "目录"}</h2>
             </div>
+            {workspaceEditorMode === "word" ? (
+              <div className="detail-mode-switch" aria-label="右侧面板切换">
+                <button
+                  type="button"
+                  className={detailPaneMode === "catalog" ? "active" : ""}
+                  onClick={() => setDetailPaneMode("catalog")}
+                >
+                  <FileText size={14} />
+                  <span>目录</span>
+                </button>
+                <button
+                  type="button"
+                  className={detailPaneMode === "format" ? "active" : ""}
+                  onClick={openDocumentFormatPane}
+                >
+                  <SlidersHorizontal size={14} />
+                  <span>排版</span>
+                </button>
+              </div>
+            ) : null}
           </div>
 
-          {activeCourse && mindMapOutline.length > 0 ? (
+          {workspaceEditorMode === "word" && detailPaneMode === "format" ? (
+            <div id="document-format-panel-slot" className="document-format-panel-slot" />
+          ) : activeCourse && mindMapOutline.length > 0 ? (
             <nav className="catalog-panel" aria-label="导图目录">
               <MindMapCatalog
                 items={mindMapOutline}
@@ -1061,6 +1285,8 @@ function App() {
           nodeTitle={selectedMindMapNode.title}
           contextText={mindMapOutline.slice(0, 80).map((item) => `${"  ".repeat(Math.max(0, item.level))}${item.title}`).join("\n")}
         />
+      ) : activeSection === "collection" ? (
+        <InformationCollectionPanel courses={courses} activeCourseId={activeCourseId} />
       ) : (
         <ChromePortManager />
       )}

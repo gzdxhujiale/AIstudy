@@ -1,20 +1,23 @@
 import React from "react";
 import {
-  Braces,
+  CircleCheck,
   Download,
-  Frame,
   GitBranch,
+  Image,
   Link2,
   Maximize2,
   Minus,
   Move,
-  Network,
   Plus,
   Redo2,
   Rows3,
   Save,
+  SlidersHorizontal,
+  StickyNote,
+  Tags,
   Trash2,
-  Undo2
+  Undo2,
+  X
 } from "lucide-react";
 import { MindMapCanvas, type MindMapCanvasHandle } from "./MindMapCanvas";
 import { MindMapTextFormatToolbar } from "./MindMapTextFormatToolbar";
@@ -29,6 +32,14 @@ import {
   normalizeLayout,
   normalizeSnapshot
 } from "./mindMapSnapshot";
+import {
+  isMindMapShortcutEvent,
+  MIND_MAP_BRANCH_SHORTCUTS,
+  MIND_MAP_SHORTCUTS_CHANGED_EVENT,
+  readMindMapShortcutSettings,
+  type MindMapBranchShortcutCommand,
+  type MindMapShortcutSettings
+} from "./mindMapShortcutSettings";
 import type {
   MindMapDocument,
   MindMapExportType,
@@ -38,6 +49,7 @@ import type {
   MindMapSelectedNode,
   MindMapSnapshot,
   SimpleMindMapNode,
+  MindMapCommandPayload,
   MindMapTextFormatPatch
 } from "./mindMapTypes";
 
@@ -57,16 +69,60 @@ type MindMapWorkspaceProps = {
   courseId: string | null;
   courseName: string;
   editorMode: WorkspaceEditorMode;
+  externalChangeRevision?: number;
   modeChangeRequest: WorkspaceModeChangeRequest | null;
   nodeSelectionRequest: WorkspaceNodeSelectionRequest | null;
   onEditorModeChange: (mode: WorkspaceEditorMode) => void;
   onOutlineChanged?: (outline: MindMapOutlineItem[]) => void;
   onNodeSelectedChanged?: (node: MindMapSelectedNode) => void;
+  isCatalogPaneCollapsed?: boolean;
+  documentDetailPaneMode?: "catalog" | "format";
+  onOpenDocumentFormatPane?: () => void;
+  onCloseDocumentFormatPane?: () => void;
 };
 
 type PendingSave = MindMapSaveInput;
 
 type StorageMode = "mysql" | "local" | "none";
+type TopicElementPanel = "note" | "tags" | "link" | "image" | "marker";
+type TopicElements = NonNullable<MindMapSelectedNode["topicElements"]>;
+type TextFormatMenuPosition = { x: number; y: number };
+
+const EMPTY_TOPIC_ELEMENTS: TopicElements = {
+  note: "",
+  tags: [],
+  hyperlink: "",
+  hyperlinkTitle: "",
+  imageUrl: "",
+  imageTitle: "",
+  priority: "",
+  progress: "",
+  expanded: true
+};
+
+const PRIORITY_OPTIONS = ["", "1", "2", "3", "4", "5"];
+const PROGRESS_OPTIONS = ["", "1", "2", "3", "4", "5", "6", "7", "8"];
+const FORMAT_PANEL_COLORS = ["#17466f", "#1f6fd1", "#0f766e", "#b45309", "#dc2626", "#7c3aed", "#334155", "#ffffff"];
+const FORMAT_PANEL_WIDTH_OPTIONS = [
+  { value: "", label: "自动" },
+  { value: "120", label: "窄" },
+  { value: "170", label: "适中" },
+  { value: "240", label: "宽" }
+];
+
+function isInteractiveKeyboardTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return (
+    target.closest(".settings-dialog") !== null ||
+    target.closest(".mindmap-topic-popover") !== null ||
+    target.closest(".mindmap-text-context-menu") !== null ||
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select" ||
+    target.closest("[contenteditable='true']") !== null
+  );
+}
 
 declare global {
   interface Window {
@@ -220,6 +276,22 @@ function findOutlineItem(items: MindMapOutlineItem[], nodeId: string): MindMapOu
   return null;
 }
 
+function countOutlineItems(items: MindMapOutlineItem[]) {
+  let count = 0;
+  const stack = [...items];
+
+  while (stack.length > 0) {
+    const item = stack.pop();
+    if (!item) continue;
+    count += 1;
+    for (let index = 0; index < item.children.length; index += 1) {
+      stack.push(item.children[index]);
+    }
+  }
+
+  return count;
+}
+
 function cloneMindMapNode(node: SimpleMindMapNode): SimpleMindMapNode {
   return {
     ...node,
@@ -325,7 +397,11 @@ function isSameSelectedNode(left: MindMapSelectedNode, right: MindMapSelectedNod
     left.textFormat?.textDecoration === right.textFormat?.textDecoration &&
     left.textFormat?.color === right.textFormat?.color &&
     left.textFormat?.fontSize === right.textFormat?.fontSize &&
-    left.textFormat?.textAutoWrapWidth === right.textFormat?.textAutoWrapWidth
+    left.textFormat?.textAutoWrapWidth === right.textFormat?.textAutoWrapWidth &&
+    left.textFormat?.fillColor === right.textFormat?.fillColor &&
+    left.textFormat?.borderColor === right.textFormat?.borderColor &&
+    left.textFormat?.borderWidth === right.textFormat?.borderWidth &&
+    JSON.stringify(left.topicElements ?? EMPTY_TOPIC_ELEMENTS) === JSON.stringify(right.topicElements ?? EMPTY_TOPIC_ELEMENTS)
   );
 }
 
@@ -333,12 +409,18 @@ export function MindMapWorkspace({
   courseId,
   courseName,
   editorMode,
+  externalChangeRevision = 0,
   modeChangeRequest,
   nodeSelectionRequest,
   onEditorModeChange,
   onOutlineChanged,
-  onNodeSelectedChanged
+  onNodeSelectedChanged,
+  isCatalogPaneCollapsed,
+  documentDetailPaneMode = "catalog",
+  onOpenDocumentFormatPane,
+  onCloseDocumentFormatPane
 }: MindMapWorkspaceProps) {
+  const workspaceRef = React.useRef<HTMLDivElement | null>(null);
   const canvasRef = React.useRef<MindMapCanvasHandle | null>(null);
   const saveTimerRef = React.useRef<number | null>(null);
   const pendingSaveRef = React.useRef<PendingSave | null>(null);
@@ -358,16 +440,40 @@ export function MindMapWorkspace({
   const [storageMode, setStorageMode] = React.useState<StorageMode>("none");
   const [error, setError] = React.useState("");
   const [savedAt, setSavedAt] = React.useState<string | null>(null);
+  const [topicPanel, setTopicPanel] = React.useState<TopicElementPanel | null>(null);
+  const [textFormatMenu, setTextFormatMenu] = React.useState<TextFormatMenuPosition | null>(null);
+  const [shortcutSettings, setShortcutSettings] = React.useState<MindMapShortcutSettings>(() => readMindMapShortcutSettings());
+  const [isFormatPanelOpen, setIsFormatPanelOpen] = React.useState(false);
   const canUseEditor = isReady && !isLoading;
   const selectedNodeRef = React.useRef(selectedNode);
+  const canUseEditorRef = React.useRef(canUseEditor);
+  const editorModeRef = React.useRef(editorMode);
+  const shortcutSettingsRef = React.useRef(shortcutSettings);
 
   React.useEffect(() => {
     selectedNodeRef.current = selectedNode;
   }, [selectedNode]);
 
   React.useEffect(() => {
+    canUseEditorRef.current = canUseEditor;
+  }, [canUseEditor]);
+
+  React.useEffect(() => {
+    editorModeRef.current = editorMode;
+  }, [editorMode]);
+
+  React.useEffect(() => {
+    shortcutSettingsRef.current = shortcutSettings;
+  }, [shortcutSettings]);
+
+  React.useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
+
+  React.useEffect(() => {
+    setTextFormatMenu(null);
+    setTopicPanel(null);
+  }, [courseId, editorMode, selectedNode.id]);
 
   const publishSelectedNode = React.useCallback(
     (node: MindMapSelectedNode) => {
@@ -479,7 +585,7 @@ export function MindMapWorkspace({
       .then(({ document, mode, error: loadError }) => {
         if (loadSequenceRef.current !== sequence) return;
         setMapId(document.mapId);
-        setSnapshot(normalizeSnapshot(document.snapshot, courseName));
+        setSnapshot(document.snapshot);
         setStorageMode(mode);
         setError(loadError);
       })
@@ -487,7 +593,7 @@ export function MindMapWorkspace({
         if (loadSequenceRef.current !== sequence) return;
         const document = await loadLocalDocument(courseId, courseName);
         setMapId(document.mapId);
-        setSnapshot(normalizeSnapshot(document.snapshot, courseName));
+        setSnapshot(document.snapshot);
         setStorageMode("local");
         setError("导图读取失败，已打开本地副本。");
       })
@@ -496,7 +602,7 @@ export function MindMapWorkspace({
           setIsLoading(false);
         }
       });
-  }, [courseId, courseName, flushPendingSave, publishSelectedNode]);
+  }, [courseId, courseName, externalChangeRevision, flushPendingSave, publishSelectedNode]);
 
   React.useEffect(() => {
     return () => {
@@ -604,6 +710,7 @@ export function MindMapWorkspace({
   );
 
   const outline = React.useMemo(() => buildMindMapOutline(snapshot?.root), [snapshot]);
+  const outlineNodeCount = React.useMemo(() => countOutlineItems(outline), [outline]);
   const focusedSnapshot = React.useMemo(
     () => (snapshot ? createFocusedSnapshot(snapshot, focusedNodeId) : null),
     [focusedNodeId, snapshot]
@@ -612,6 +719,12 @@ export function MindMapWorkspace({
   React.useEffect(() => {
     onOutlineChanged?.(outline);
   }, [onOutlineChanged, outline]);
+
+  React.useEffect(() => {
+    if (editorMode === "mindmap" && isCatalogPaneCollapsed) {
+      setIsFormatPanelOpen(true);
+    }
+  }, [editorMode, isCatalogPaneCollapsed]);
 
   React.useEffect(() => {
     if (!snapshot || !focusedNodeId) return;
@@ -671,6 +784,91 @@ export function MindMapWorkspace({
     [canUseEditor, publishSelectedNode, selectedNode.id]
   );
 
+  const executeBranchShortcut = React.useCallback((command: MindMapBranchShortcutCommand) => {
+    canvasRef.current?.exec(command);
+  }, []);
+
+  React.useEffect(() => {
+    const updateShortcuts = () => {
+      setShortcutSettings(readMindMapShortcutSettings());
+    };
+    window.addEventListener(MIND_MAP_SHORTCUTS_CHANGED_EVENT, updateShortcuts);
+    window.addEventListener("storage", updateShortcuts);
+    return () => {
+      window.removeEventListener(MIND_MAP_SHORTCUTS_CHANGED_EVENT, updateShortcuts);
+      window.removeEventListener("storage", updateShortcuts);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || editorModeRef.current !== "mindmap" || !canUseEditorRef.current) return;
+      if (isInteractiveKeyboardTarget(event.target)) return;
+
+      const settings = shortcutSettingsRef.current;
+      const match = MIND_MAP_BRANCH_SHORTCUTS.find((item) => isMindMapShortcutEvent(event, settings[item.command]));
+      if (!match) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      executeBranchShortcut(match.command);
+      setTextFormatMenu(null);
+      setTopicPanel(null);
+    };
+
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [executeBranchShortcut]);
+
+  const openTextFormatMenuAt = React.useCallback(
+    (clientX: number, clientY: number) => {
+      if (!canUseEditorRef.current || !selectedNodeRef.current.id) return;
+      const rect = workspaceRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const x = Math.max(8, Math.min(clientX - rect.left, Math.max(8, rect.width - 372)));
+      const y = Math.max(48, Math.min(clientY - rect.top, Math.max(48, rect.height - 126)));
+      setTopicPanel(null);
+      setTextFormatMenu({ x, y });
+    },
+    []
+  );
+
+  React.useEffect(() => {
+    const handleContextMenu = (event: MouseEvent) => {
+      const workspace = workspaceRef.current;
+      if (!workspace || !(event.target instanceof Node) || !workspace.contains(event.target)) return;
+      if (!(event.target instanceof Element) || !event.target.closest(".mindmap-canvas-frame")) return;
+      if (!canUseEditorRef.current || !selectedNodeRef.current.id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openTextFormatMenuAt(event.clientX, event.clientY);
+    };
+
+    document.addEventListener("contextmenu", handleContextMenu, true);
+    return () => document.removeEventListener("contextmenu", handleContextMenu, true);
+  }, [openTextFormatMenuAt]);
+
+  const openTextFormatMenu = React.useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!canUseEditor || !selectedNode.id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openTextFormatMenuAt(event.clientX, event.clientY);
+    },
+    [canUseEditor, openTextFormatMenuAt, selectedNode.id]
+  );
+
+  const runTopicElementCommand = React.useCallback(
+    (command: MindMapCommandPayload & { type: "set-note" | "set-tags" | "set-hyperlink" | "set-image" | "set-marker" }) => {
+      if (!canUseEditor || !selectedNode.id) return;
+      const { type, ...payload } = command;
+      canvasRef.current?.exec(type, payload);
+      setTopicPanel(null);
+      setTextFormatMenu(null);
+    },
+    [canUseEditor, selectedNode.id]
+  );
+
   const selectDocumentNode = React.useCallback(
     (nodeId: string) => {
       const item = findOutlineItem(outline, nodeId);
@@ -692,66 +890,68 @@ export function MindMapWorkspace({
     );
   }
 
-  const nodeCount = countNodes(focusedSnapshot.root);
+  const nodeCount = focusedNodeId ? countNodes(focusedSnapshot.root) : outlineNodeCount;
   const storageText = storageMode === "mysql" ? "已连接" : storageMode === "local" ? "本地副本" : "未连接";
   const currentLayout = normalizeLayout(focusedSnapshot.layout);
   const canvasKey = `${courseId}:${focusedNodeId ?? "full"}`;
-
-  if (editorMode === "word") {
-    return (
-      <div className="mindmap-workspace" data-editor-mode="word">
-        <KnowledgeDocumentWorkspace
-          courseId={courseId}
-          mindMapId={mapId}
-          selectedNode={selectedNode}
-          outline={outline}
-          onNodeSelect={selectDocumentNode}
-        />
-      </div>
-    );
-  }
+  const topicElements = selectedNode.topicElements ?? EMPTY_TOPIC_ELEMENTS;
+  const topicElementDisabled = !canUseEditor || !selectedNode.id;
 
   return (
-    <div className="mindmap-workspace" data-editor-mode="mindmap">
+    <div ref={workspaceRef} className="mindmap-workspace" data-editor-mode={editorMode}>
+      {editorMode === "mindmap" ? (
       <div className="mindmap-local-toolbar" aria-label="导图编辑工具栏">
-        <button type="button" title="添加子主题" onClick={() => canvasRef.current?.exec("insert-child")} disabled={!canUseEditor}>
-          <Plus size={15} />
-          <span>子主题</span>
+        <button
+          className={topicElements.note ? "active" : ""}
+          type="button"
+          title="备注"
+          onClick={() => setTopicPanel((value) => value === "note" ? null : "note")}
+          disabled={topicElementDisabled}
+        >
+          <StickyNote size={15} />
         </button>
-        <button type="button" title="添加同级主题" onClick={() => canvasRef.current?.exec("insert-sibling")} disabled={!canUseEditor}>
-          <GitBranch size={15} />
-          <span>同级</span>
+        <button
+          className={topicElements.tags.length > 0 ? "active" : ""}
+          type="button"
+          title="标签"
+          onClick={() => setTopicPanel((value) => value === "tags" ? null : "tags")}
+          disabled={topicElementDisabled}
+        >
+          <Tags size={15} />
         </button>
-        <button type="button" title="添加父主题" onClick={() => canvasRef.current?.exec("insert-parent")} disabled={!canUseEditor}>
-          <Rows3 size={15} />
-          <span>父主题</span>
-        </button>
-        <button type="button" title="整理布局" onClick={() => canvasRef.current?.exec("reset-layout")} disabled={!canUseEditor}>
-          <Network size={15} />
-          <span>整理</span>
-        </button>
-        <span className="mindmap-toolbar-separator" />
-        <button type="button" title="添加关系线" onClick={() => canvasRef.current?.exec("add-relationship")} disabled={!canUseEditor}>
+        <button
+          className={topicElements.hyperlink ? "active" : ""}
+          type="button"
+          title="链接"
+          onClick={() => setTopicPanel((value) => value === "link" ? null : "link")}
+          disabled={topicElementDisabled}
+        >
           <Link2 size={15} />
-          <span>关系线</span>
         </button>
-        <button type="button" title="添加边界" onClick={() => canvasRef.current?.exec("add-boundary")} disabled={!canUseEditor}>
-          <Frame size={15} />
-          <span>边界</span>
+        <button
+          className={topicElements.imageUrl ? "active" : ""}
+          type="button"
+          title="图片"
+          onClick={() => setTopicPanel((value) => value === "image" ? null : "image")}
+          disabled={topicElementDisabled}
+        >
+          <Image size={15} />
         </button>
-        <button type="button" title="添加概要" onClick={() => canvasRef.current?.exec("add-summary")} disabled={!canUseEditor}>
-          <Braces size={15} />
-          <span>概要</span>
+        <button
+          className={topicElements.priority || topicElements.progress ? "active" : ""}
+          type="button"
+          title="标记"
+          onClick={() => setTopicPanel((value) => value === "marker" ? null : "marker")}
+          disabled={topicElementDisabled}
+        >
+          <CircleCheck size={15} />
+        </button>
+        <button type="button" title={topicElements.expanded ? "折叠主题" : "展开主题"} onClick={() => canvasRef.current?.exec("toggle-expand")} disabled={topicElementDisabled}>
+          <Rows3 size={15} />
         </button>
         <button type="button" title="删除选中主题" onClick={() => canvasRef.current?.exec("delete-node")} disabled={!canUseEditor}>
           <Trash2 size={15} />
         </button>
-        <span className="mindmap-toolbar-separator" />
-        <MindMapTextFormatToolbar
-          value={selectedNode.textFormat}
-          disabled={!canUseEditor || !selectedNode.id}
-          onChange={applyTextFormat}
-        />
         <span className="mindmap-toolbar-separator" />
         <button type="button" title="撤销" onClick={() => canvasRef.current?.exec("undo")} disabled={!canUseEditor}>
           <Undo2 size={15} />
@@ -782,6 +982,18 @@ export function MindMapWorkspace({
           <span>画布拖拽</span>
         </button>
         <span className="mindmap-toolbar-spacer" />
+        <button
+          className={isFormatPanelOpen ? "active" : ""}
+          type="button"
+          title="排版"
+          aria-label="排版"
+          aria-pressed={isFormatPanelOpen}
+          onClick={() => setIsFormatPanelOpen((value) => !value)}
+          disabled={!canUseEditor}
+        >
+          <SlidersHorizontal size={15} />
+          <span>排版</span>
+        </button>
         <div className="mindmap-select-control">
           <span>布局</span>
           <select
@@ -822,18 +1034,72 @@ export function MindMapWorkspace({
           <span>{isSaving ? "保存中" : "保存"}</span>
         </button>
       </div>
+      ) : null}
 
-      <MindMapCanvas
-        key={canvasKey}
-        ref={canvasRef}
-        snapshot={focusedSnapshot}
-        canvasDragEnabled={canvasDragEnabled}
-        onSnapshotChanged={queueCanvasSnapshotSave}
-        onNodeSelected={handleNodeSelected}
-        onReadyChange={setIsReady}
-        onError={setError}
-      />
+      {editorMode === "mindmap" && topicPanel ? (
+        <TopicElementPopover
+          panel={topicPanel}
+          value={topicElements}
+          onCancel={() => setTopicPanel(null)}
+          onApply={runTopicElementCommand}
+        />
+      ) : null}
 
+      {editorMode === "mindmap" && textFormatMenu ? (
+        <div
+          className="mindmap-text-context-menu"
+          style={{ left: textFormatMenu.x, top: textFormatMenu.y }}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <MindMapTextFormatToolbar
+            value={selectedNode.textFormat}
+            disabled={!canUseEditor || !selectedNode.id}
+            onChange={applyTextFormat}
+          />
+        </div>
+      ) : null}
+
+      {editorMode === "mindmap" && isFormatPanelOpen ? (
+        <MindMapFormatPanel
+          selectedNode={selectedNode}
+          disabled={!canUseEditor}
+          currentLayout={currentLayout}
+          canvasDragEnabled={canvasDragEnabled}
+          onClose={() => setIsFormatPanelOpen(false)}
+          onChangeLayout={changeLayout}
+          onChangeTextFormat={applyTextFormat}
+          onToggleCanvasDrag={() => setCanvasDragEnabled((value) => !value)}
+          onRunCommand={(command) => canvasRef.current?.exec(command)}
+        />
+      ) : null}
+
+      <div className="mindmap-canvas-retained" aria-hidden={editorMode === "word" ? "true" : undefined}>
+        <MindMapCanvas
+          key={canvasKey}
+          ref={canvasRef}
+          snapshot={focusedSnapshot}
+          canvasDragEnabled={canvasDragEnabled}
+          onSnapshotChanged={queueCanvasSnapshotSave}
+          onNodeSelected={handleNodeSelected}
+          onReadyChange={setIsReady}
+          onError={setError}
+          onContextMenu={openTextFormatMenu}
+        />
+      </div>
+
+      {editorMode === "word" ? (
+        <KnowledgeDocumentWorkspace
+          courseId={courseId}
+          mindMapId={mapId}
+          selectedNode={selectedNode}
+          outline={outline}
+          externalChangeRevision={externalChangeRevision}
+          onNodeSelect={selectDocumentNode}
+          detailPaneMode={documentDetailPaneMode}
+          onOpenFormatPane={onOpenDocumentFormatPane}
+          onCloseFormatPane={onCloseDocumentFormatPane}
+        />
+      ) : (
       <div className="mindmap-status-strip">
         <span>{canUseEditor ? "就绪" : "载入中"}</span>
         <span>{nodeCount} 个主题</span>
@@ -843,6 +1109,300 @@ export function MindMapWorkspace({
         {savedAt ? <span>已保存 {savedAt}</span> : null}
         {error ? <span className="mindmap-error">{error}</span> : null}
       </div>
+      )}
     </div>
   );
+}
+
+function normalizeFormatPanelColor(value: string | undefined, fallback: string) {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+}
+
+function MindMapFormatPanel({
+  selectedNode,
+  disabled,
+  currentLayout,
+  canvasDragEnabled,
+  onClose,
+  onChangeLayout,
+  onChangeTextFormat,
+  onToggleCanvasDrag,
+  onRunCommand
+}: {
+  selectedNode: MindMapSelectedNode;
+  disabled: boolean;
+  currentLayout: MindMapLayoutType;
+  canvasDragEnabled: boolean;
+  onClose: () => void;
+  onChangeLayout: (layout: MindMapLayoutType) => void;
+  onChangeTextFormat: (patch: MindMapTextFormatPatch) => void;
+  onToggleCanvasDrag: () => void;
+  onRunCommand: (command: MindMapBranchShortcutCommand) => void;
+}) {
+  const nodeDisabled = disabled || !selectedNode.id;
+  const format = selectedNode.textFormat ?? {};
+  const fontSize = Number.isFinite(Number(format.fontSize)) ? Number(format.fontSize) : 16;
+  const textColor = normalizeFormatPanelColor(format.color, "#17466f");
+  const fillColor = normalizeFormatPanelColor(format.fillColor, "#ffffff");
+  const borderColor = normalizeFormatPanelColor(format.borderColor, "#72a9d8");
+  const borderWidth = Number.isFinite(Number(format.borderWidth)) ? String(Number(format.borderWidth)) : "1";
+  const textWidth = format.textAutoWrapWidth ? String(format.textAutoWrapWidth) : "";
+
+  return (
+    <aside className="mindmap-format-panel" aria-label="排版">
+      <header className="mindmap-format-panel-header">
+        <strong>排版</strong>
+        <button type="button" title="关闭排版" aria-label="关闭排版" onClick={onClose}>
+          <X size={15} />
+        </button>
+      </header>
+
+      <div className="mindmap-format-tabs" role="tablist" aria-label="排版类型">
+        <button type="button" className="active">样式</button>
+        <button type="button">画布</button>
+      </div>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">
+          <span>结构</span>
+        </div>
+        <label className="mindmap-format-field">
+          <span>布局</span>
+          <select value={currentLayout} disabled={disabled} onChange={(event) => onChangeLayout(event.target.value as MindMapLayoutType)}>
+            {MIND_MAP_LAYOUT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+        <button className="mindmap-format-wide-button" type="button" disabled={disabled} onClick={() => onRunCommand("reset-layout")}>
+          整理布局
+        </button>
+      </section>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">
+          <span>主题</span>
+        </div>
+        <div className="mindmap-format-color-row">
+          <label>
+            <span>填充</span>
+            <input type="color" value={fillColor} disabled={nodeDisabled} onChange={(event) => onChangeTextFormat({ fillColor: event.target.value })} />
+          </label>
+          <label>
+            <span>边框</span>
+            <input type="color" value={borderColor} disabled={nodeDisabled} onChange={(event) => onChangeTextFormat({ borderColor: event.target.value })} />
+          </label>
+        </div>
+        <label className="mindmap-format-field">
+          <span>边框宽度</span>
+          <select value={borderWidth} disabled={nodeDisabled} onChange={(event) => onChangeTextFormat({ borderWidth: Number(event.target.value) })}>
+            <option value="0">无</option>
+            <option value="1">细</option>
+            <option value="2">中</option>
+            <option value="3">粗</option>
+          </select>
+        </label>
+      </section>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">
+          <span>文本</span>
+        </div>
+        <div className="mindmap-format-inline">
+          <select
+            value={fontSize}
+            disabled={nodeDisabled}
+            aria-label="字号"
+            onChange={(event) => onChangeTextFormat({ fontSize: Number(event.target.value) })}
+          >
+            {[12, 14, 16, 18, 20, 24, 28].map((size) => (
+              <option key={size} value={size}>{size}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className={format.fontWeight === "bold" ? "active" : ""}
+            disabled={nodeDisabled}
+            onClick={() => onChangeTextFormat({ fontWeight: format.fontWeight === "bold" ? "normal" : "bold" })}
+          >
+            B
+          </button>
+          <button
+            type="button"
+            className={format.fontStyle === "italic" ? "active" : ""}
+            disabled={nodeDisabled}
+            onClick={() => onChangeTextFormat({ fontStyle: format.fontStyle === "italic" ? "normal" : "italic" })}
+          >
+            I
+          </button>
+          <input type="color" aria-label="文字颜色" value={textColor} disabled={nodeDisabled} onChange={(event) => onChangeTextFormat({ color: event.target.value })} />
+        </div>
+        <div className="mindmap-format-swatches" aria-label="常用文字颜色">
+          {FORMAT_PANEL_COLORS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              title={color}
+              disabled={nodeDisabled}
+              className={color.toLowerCase() === textColor.toLowerCase() ? "active" : ""}
+              style={{ backgroundColor: color }}
+              onClick={() => onChangeTextFormat({ color })}
+            />
+          ))}
+        </div>
+        <label className="mindmap-format-field">
+          <span>宽度</span>
+          <select value={textWidth} disabled={nodeDisabled} onChange={(event) => onChangeTextFormat({ textAutoWrapWidth: event.target.value ? Number(event.target.value) : undefined })}>
+            {FORMAT_PANEL_WIDTH_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">
+          <span>分支</span>
+        </div>
+        <div className="mindmap-format-actions">
+          <button type="button" disabled={nodeDisabled} onClick={() => onRunCommand("add-boundary")}>边界</button>
+          <button type="button" disabled={nodeDisabled} onClick={() => onRunCommand("add-summary")}>概要</button>
+        </div>
+      </section>
+
+      <section className="mindmap-format-section">
+        <div className="mindmap-format-section-title">
+          <span>画布</span>
+        </div>
+        <button className={canvasDragEnabled ? "mindmap-format-wide-button active" : "mindmap-format-wide-button"} type="button" disabled={disabled} onClick={onToggleCanvasDrag}>
+          {canvasDragEnabled ? "画布拖拽已开" : "画布拖拽"}
+        </button>
+      </section>
+    </aside>
+  );
+}
+
+function TopicElementPopover({
+  panel,
+  value,
+  onCancel,
+  onApply
+}: {
+  panel: TopicElementPanel;
+  value: TopicElements;
+  onCancel: () => void;
+  onApply: (command: MindMapCommandPayload & { type: "set-note" | "set-tags" | "set-hyperlink" | "set-image" | "set-marker" }) => void;
+}) {
+  const [note, setNote] = React.useState(value.note);
+  const [tags, setTags] = React.useState(value.tags.join("，"));
+  const [hyperlink, setHyperlink] = React.useState(value.hyperlink);
+  const [hyperlinkTitle, setHyperlinkTitle] = React.useState(value.hyperlinkTitle);
+  const [imageUrl, setImageUrl] = React.useState(value.imageUrl);
+  const [imageTitle, setImageTitle] = React.useState(value.imageTitle);
+  const [priority, setPriority] = React.useState(value.priority);
+  const [progress, setProgress] = React.useState(value.progress);
+
+  React.useEffect(() => {
+    setNote(value.note);
+    setTags(value.tags.join("，"));
+    setHyperlink(value.hyperlink);
+    setHyperlinkTitle(value.hyperlinkTitle);
+    setImageUrl(value.imageUrl);
+    setImageTitle(value.imageTitle);
+    setPriority(value.priority);
+    setProgress(value.progress);
+  }, [value]);
+
+  const submit = () => {
+    if (panel === "note") {
+      onApply({ type: "set-note", note });
+    }
+    if (panel === "tags") {
+      onApply({ type: "set-tags", tags: splitTags(tags) });
+    }
+    if (panel === "link") {
+      onApply({ type: "set-hyperlink", hyperlink, hyperlinkTitle });
+    }
+    if (panel === "image") {
+      onApply({ type: "set-image", imageUrl, imageTitle });
+    }
+    if (panel === "marker") {
+      onApply({ type: "set-marker", markerType: "priority", markerValue: priority || null });
+      onApply({ type: "set-marker", markerType: "progress", markerValue: progress || null });
+    }
+  };
+
+  return (
+    <div className="mindmap-topic-popover" role="dialog" aria-label="主题元素">
+      {panel === "note" ? (
+        <label className="mindmap-topic-field">
+          <span>备注</span>
+          <textarea value={note} onChange={(event) => setNote(event.target.value)} />
+        </label>
+      ) : null}
+      {panel === "tags" ? (
+        <label className="mindmap-topic-field">
+          <span>标签</span>
+          <input value={tags} onChange={(event) => setTags(event.target.value)} />
+        </label>
+      ) : null}
+      {panel === "link" ? (
+        <>
+          <label className="mindmap-topic-field">
+            <span>链接</span>
+            <input value={hyperlink} onChange={(event) => setHyperlink(event.target.value)} />
+          </label>
+          <label className="mindmap-topic-field">
+            <span>标题</span>
+            <input value={hyperlinkTitle} onChange={(event) => setHyperlinkTitle(event.target.value)} />
+          </label>
+        </>
+      ) : null}
+      {panel === "image" ? (
+        <>
+          <label className="mindmap-topic-field">
+            <span>图片</span>
+            <input value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} />
+          </label>
+          <label className="mindmap-topic-field">
+            <span>标题</span>
+            <input value={imageTitle} onChange={(event) => setImageTitle(event.target.value)} />
+          </label>
+        </>
+      ) : null}
+      {panel === "marker" ? (
+        <div className="mindmap-topic-marker-grid">
+          <label className="mindmap-topic-field">
+            <span>优先级</span>
+            <select value={priority} onChange={(event) => setPriority(event.target.value)}>
+              {PRIORITY_OPTIONS.map((item) => (
+                <option value={item} key={item}>{item ? `P${item}` : "无"}</option>
+              ))}
+            </select>
+          </label>
+          <label className="mindmap-topic-field">
+            <span>进度</span>
+            <select value={progress} onChange={(event) => setProgress(event.target.value)}>
+              {PROGRESS_OPTIONS.map((item) => (
+                <option value={item} key={item}>{item ? `${item}/8` : "无"}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      ) : null}
+      <div className="mindmap-topic-actions">
+        <button type="button" onClick={onCancel}>取消</button>
+        <button type="button" onClick={submit}>确定</button>
+      </div>
+    </div>
+  );
+}
+
+function splitTags(value: string) {
+  const unique = new Set<string>();
+  value.split(/[，,;\s]+/).forEach((item) => {
+    const text = item.trim().slice(0, 24);
+    if (text) unique.add(text);
+  });
+  return Array.from(unique).slice(0, 8);
 }

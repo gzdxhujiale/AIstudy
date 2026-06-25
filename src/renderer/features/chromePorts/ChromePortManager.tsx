@@ -1,7 +1,7 @@
 import React from "react";
 import { CheckCircle2, ExternalLink, Globe2, Loader2, RefreshCw, XCircle } from "lucide-react";
 
-type ChromePortPlatformId = "doubao" | "chatgpt";
+type ChromePortPlatformId = "doubao" | "chatgpt" | "bilibili" | "zhihu";
 
 type ChromePortStatus = {
   id: ChromePortPlatformId;
@@ -31,6 +31,7 @@ declare global {
     aistudyChromePorts?: {
       status: () => Promise<ChromePortStatus[]>;
       openLogin: (platformId: ChromePortPlatformId) => Promise<ChromePortOpenResult>;
+      openPage: (input: { platformId: ChromePortPlatformId; url: string }) => Promise<ChromePortOpenResult>;
     };
   }
 }

@@ -423,7 +423,6 @@ export function CourseSidebar({
     <section className="library-pane" aria-label="课程列表">
       <div className="pane-heading">
         <div>
-          <p className="section-kicker">知识库</p>
           <h1>知识库</h1>
         </div>
         <div className="pane-heading-actions">

@@ -1,6 +1,6 @@
 {
   "name": "aistudy",
-  "version": "0.1.26",
+  "version": "0.1.68",
   "description": "AIstudy desktop shell.",
   "author": "SnowLove0303",
   "private": false,
@@ -19,6 +19,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "dev:app": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev/run-app.ps1",
     "build": "tsc && vite build && node scripts/build/prepare-renderer-vendors.mjs && tsc -p tsconfig.electron.json",
     "qa:error-codes": "npm run build && node scripts/qa/validate-error-codes.mjs",
     "pack": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist",
@@ -70,6 +71,12 @@
       "dist-electron/**/*",
       "build/icon.ico",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "scripts/mcp",
+        "to": "scripts/mcp"
+      }
     ],
     "win": {
       "icon": "build/icon.ico",

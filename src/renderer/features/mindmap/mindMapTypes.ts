@@ -49,6 +49,12 @@ export type MindMapCommand =
   | "add-relationship"
   | "add-boundary"
   | "add-summary"
+  | "toggle-expand"
+  | "set-note"
+  | "set-tags"
+  | "set-hyperlink"
+  | "set-image"
+  | "set-marker"
   | "delete-node"
   | "undo"
   | "redo"
@@ -57,6 +63,17 @@ export type MindMapCommand =
   | "zoom-in"
   | "zoom-out";
 
+export type MindMapCommandPayload = {
+  note?: string;
+  tags?: string[];
+  hyperlink?: string;
+  hyperlinkTitle?: string;
+  imageUrl?: string;
+  imageTitle?: string;
+  markerType?: "priority" | "progress";
+  markerValue?: string | null;
+};
+
 export type MindMapTextFormat = {
   fontWeight?: "normal" | "bold";
   fontStyle?: "normal" | "italic";
@@ -64,6 +81,9 @@ export type MindMapTextFormat = {
   color?: string;
   fontSize?: number;
   textAutoWrapWidth?: number;
+  fillColor?: string;
+  borderColor?: string;
+  borderWidth?: number;
 };
 
 export type MindMapTextFormatPatch = Partial<MindMapTextFormat>;
@@ -85,6 +105,17 @@ export type MindMapSelectedNode = {
   id: string | null;
   title: string;
   textFormat?: MindMapTextFormat;
+  topicElements?: {
+    note: string;
+    tags: string[];
+    hyperlink: string;
+    hyperlinkTitle: string;
+    imageUrl: string;
+    imageTitle: string;
+    priority: string;
+    progress: string;
+    expanded: boolean;
+  };
 };
 
 export type MindMapOutlineItem = {
@@ -132,7 +163,7 @@ export type MindMapEditorHandle = {
   selectNode: (nodeId: string) => MindMapSelectedNode | null;
   setLayout: (layout: MindMapLayoutType) => MindMapSnapshot | null;
   applyTextFormat: (patch: MindMapTextFormatPatch) => MindMapSelectedNode | null;
-  exec: (command: MindMapCommand) => void;
+  exec: (command: MindMapCommand, payload?: MindMapCommandPayload) => void;
   exportFile: (type: MindMapExportType, fileName: string) => Promise<void>;
   setCanvasDragEnabled: (enabled: boolean) => void;
   setViewportControlSize: (width: number, height: number) => void;

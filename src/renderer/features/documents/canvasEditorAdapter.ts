@@ -1,8 +1,10 @@
 import type { IEditorData, IElement, IRangeStyle } from "@hufe921/canvas-editor";
 import type {
+  KnowledgeDocumentAlignment,
   KnowledgeDocumentContent,
   KnowledgeDocumentEditorHandle,
   KnowledgeDocumentFormatState,
+  KnowledgeDocumentListType,
   KnowledgeDocumentSnapshot
 } from "./knowledgeDocumentTypes";
 import { AISTUDY_CORE_CONTRACT } from "../../domain/coreContracts";
@@ -64,17 +66,65 @@ export async function preloadCanvasDocumentEditor() {
   await loadCanvasEditor();
 }
 
-function normalizeElementList(value: unknown): IElement[] {
+function toElementText(value: unknown) {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function getTextRunSignature(element: IElement) {
+  return JSON.stringify(
+    Object.entries(element)
+      .filter(([key]) => key !== "value")
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
+}
+
+function compactElementList(value: unknown, fallbackToBlank: boolean): IElement[] {
   if (!Array.isArray(value)) return [{ value: "" } as IElement];
   const list = value.filter((item): item is IElement => Boolean(item && typeof item === "object"));
-  return list.length > 0 ? list : [{ value: "" } as IElement];
+  const compacted: IElement[] = [];
+
+  for (const element of list) {
+    if (!isTextElement(element)) {
+      compacted.push(element);
+      continue;
+    }
+
+    const next = { ...element, value: toElementText(element.value) } as IElement;
+    if (next.rowFlex === "justify") {
+      next.rowFlex = "alignment" as IElement["rowFlex"];
+    }
+    if (next.value.length === 0) {
+      continue;
+    }
+
+    const previous = compacted[compacted.length - 1];
+    if (previous && isTextElement(previous) && getTextRunSignature(previous) === getTextRunSignature(next)) {
+      previous.value = `${previous.value}${next.value}`;
+      continue;
+    }
+
+    compacted.push(next);
+  }
+
+  if (compacted.length > 0) return compacted;
+  return fallbackToBlank ? [{ value: "" } as IElement] : [];
+}
+
+function normalizeElementList(value: unknown): IElement[] {
+  return compactElementList(value, true);
+}
+
+function normalizeOptionalElementList(value: unknown): IElement[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = compactElementList(value, false);
+  return list.length > 0 ? list : undefined;
 }
 
 function normalizeEditorData(content: KnowledgeDocumentContent | null | undefined): IEditorData {
   return {
-    header: Array.isArray(content?.header) ? (content?.header as IElement[]) : undefined,
+    header: normalizeOptionalElementList(content?.header),
     main: normalizeElementList(content?.main),
-    footer: Array.isArray(content?.footer) ? (content?.footer as IElement[]) : undefined,
+    footer: normalizeOptionalElementList(content?.footer),
     graffiti: Array.isArray(content?.graffiti) ? (content?.graffiti as IEditorData["graffiti"]) : undefined
   };
 }
@@ -233,32 +283,49 @@ function toSnapshot(editor: CanvasEditorInstance): KnowledgeDocumentSnapshot {
 
 function toFormatState(payload: IRangeStyle): KnowledgeDocumentFormatState {
   return {
+    fontFamily: payload.font || "Microsoft YaHei",
     fontSize: Number.isFinite(payload.size) ? payload.size : DEFAULT_FONT_SIZE,
     color: payload.color || DEFAULT_COLOR,
+    highlight: payload.highlight ?? null,
     bold: Boolean(payload.bold),
     italic: Boolean(payload.italic),
-    underline: Boolean(payload.underline)
+    underline: Boolean(payload.underline),
+    strikeout: Boolean(payload.strikeout),
+    alignment: payload.rowFlex === "alignment" ? "justify" : payload.rowFlex ?? null,
+    titleLevel: payload.level ?? "paragraph",
+    listType: payload.listType ?? "none"
   };
+}
+
+function areFormatStatesEqual(left: KnowledgeDocumentFormatState, right: KnowledgeDocumentFormatState) {
+  return (
+    left.fontFamily === right.fontFamily &&
+    left.fontSize === right.fontSize &&
+    left.color === right.color &&
+    left.highlight === right.highlight &&
+    left.bold === right.bold &&
+    left.italic === right.italic &&
+    left.underline === right.underline &&
+    left.strikeout === right.strikeout &&
+    left.alignment === right.alignment &&
+    left.titleLevel === right.titleLevel &&
+    left.listType === right.listType
+  );
 }
 
 function toFormatStateFromElement(element: IElement | IRangeStyle | null | undefined, fallback: KnowledgeDocumentFormatState): KnowledgeDocumentFormatState {
   return {
+    fontFamily: typeof element?.font === "string" && element.font ? element.font : fallback.fontFamily,
     fontSize: Number.isFinite(element?.size) ? Number(element?.size) : fallback.fontSize,
     color: element?.color || fallback.color,
+    highlight: element?.highlight ?? fallback.highlight,
     bold: element?.bold ?? fallback.bold,
     italic: element?.italic ?? fallback.italic,
-    underline: element?.underline ?? fallback.underline
-  };
-}
-
-function applyFormatToElement(element: IElement, format: KnowledgeDocumentFormatState): IElement {
-  return {
-    ...element,
-    size: format.fontSize,
-    color: format.color,
-    bold: format.bold,
-    italic: format.italic,
-    underline: format.underline
+    underline: element?.underline ?? fallback.underline,
+    strikeout: element?.strikeout ?? fallback.strikeout,
+    alignment: element?.rowFlex === "alignment" ? "justify" : element?.rowFlex ?? fallback.alignment,
+    titleLevel: element?.level ?? fallback.titleLevel,
+    listType: element?.listType ?? fallback.listType
   };
 }
 
@@ -284,7 +351,7 @@ export async function createCanvasDocumentEditor(
   snapshot: KnowledgeDocumentSnapshot,
   events: CanvasDocumentEvents
 ): Promise<KnowledgeDocumentEditorHandle> {
-  const { default: Editor, EditorMode, PageMode, PaperDirection, RenderMode } = await loadCanvasEditor();
+  const { default: Editor, EditorMode, PageMode, PaperDirection, RenderMode, RowFlex, ListType, ListStyle, TitleLevel } = await loadCanvasEditor();
   const pageSize = getLandscapePageSize(container);
   const editor = new Editor(container, normalizeEditorData(normalizeSnapshot(snapshot).content), {
     mode: EditorMode.EDIT,
@@ -305,13 +372,22 @@ export async function createCanvasDocumentEditor(
 
   let lastSelectedText = "";
   let isNormalizingInputStyle = false;
+  let isPointerSelecting = false;
   let lastRange: CanvasRange | null = null;
+  let pendingFormatFrame: number | null = null;
+  let pendingFormatState: KnowledgeDocumentFormatState | null = null;
   let lastFormatState: KnowledgeDocumentFormatState = {
+    fontFamily: "Microsoft YaHei",
     fontSize: DEFAULT_FONT_SIZE,
     color: DEFAULT_COLOR,
+    highlight: null,
     bold: false,
     italic: false,
-    underline: false
+    underline: false,
+    strikeout: false,
+    alignment: null,
+    titleLevel: "paragraph",
+    listType: "none"
   };
   const isSelectedRange = (range: CanvasRange | null) => {
     return Boolean(range && (range.startIndex !== range.endIndex || range.isCrossRowCol || range.tableId));
@@ -327,6 +403,32 @@ export async function createCanvasDocumentEditor(
       return lastRange;
     }
   };
+  const restoreRememberedRange = () => {
+    const currentRange = rememberRange();
+    if (isSelectedRange(currentRange)) return true;
+    if (!lastRange) return false;
+
+    try {
+      editor.command.executeSetRange(
+        lastRange.startIndex,
+        lastRange.endIndex,
+        lastRange.tableId,
+        lastRange.startTdIndex,
+        lastRange.endTdIndex,
+        lastRange.startTrIndex,
+        lastRange.endTrIndex
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const runFormatCommand = (action: () => void) => {
+    restoreRememberedRange();
+    action();
+    rememberRange();
+    events.onSnapshotChanged?.(toSnapshot(editor));
+  };
   const readCurrentSelectionElementList = () => {
     try {
       return editor.command.getRangeContext()?.selectionElementList ?? [];
@@ -341,6 +443,33 @@ export async function createCanvasDocumentEditor(
     }
     return selectedText;
   };
+  const flushFormatState = () => {
+    pendingFormatFrame = null;
+    const nextState = pendingFormatState;
+    pendingFormatState = null;
+    if (!nextState || areFormatStatesEqual(nextState, lastFormatState)) return;
+    lastFormatState = nextState;
+    events.onFormatChanged?.(nextState);
+  };
+  const scheduleFormatState = (nextState: KnowledgeDocumentFormatState) => {
+    pendingFormatState = nextState;
+    if (isPointerSelecting) return;
+    if (pendingFormatFrame !== null) return;
+    pendingFormatFrame = window.requestAnimationFrame(flushFormatState);
+  };
+  const finishPointerSelection = () => {
+    if (!isPointerSelecting) return;
+    isPointerSelecting = false;
+    if (!pendingFormatState || pendingFormatFrame !== null) return;
+    pendingFormatFrame = window.requestAnimationFrame(flushFormatState);
+  };
+  const handlePointerDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    isPointerSelecting = true;
+  };
+  container.addEventListener("pointerdown", handlePointerDown, true);
+  window.addEventListener("pointerup", finishPointerSelection);
+  window.addEventListener("pointercancel", finishPointerSelection);
 
   editor.listener.contentChange = () => {
     if (isNormalizingInputStyle) {
@@ -373,10 +502,8 @@ export async function createCanvasDocumentEditor(
     events.onSnapshotChanged?.(toSnapshot(editor));
   };
   editor.listener.rangeStyleChange = (payload) => {
-    lastFormatState = toFormatState(payload);
-    events.onFormatChanged?.(lastFormatState);
+    scheduleFormatState(toFormatState(payload));
     rememberRange();
-    rememberSelectedText();
   };
   editor.register.contextMenuList([
     {
@@ -393,47 +520,90 @@ export async function createCanvasDocumentEditor(
     getSnapshot: () => toSnapshot(editor),
     getSelectedText: () => rememberSelectedText() || lastSelectedText,
     hasSelection: () => {
-      rememberRange();
+      if (!restoreRememberedRange()) return false;
       return Boolean(readEditorRangeText(editor) || readCurrentSelectionElementList().length > 0);
     },
     exec: (command) => {
       if (command === "undo") editor.command.executeUndo();
       if (command === "redo") editor.command.executeRedo();
-      if (command === "bold") editor.command.executeBold();
-      if (command === "italic") editor.command.executeItalic();
-      if (command === "underline") editor.command.executeUnderline();
+      if (command === "bold") runFormatCommand(() => editor.command.executeBold());
+      if (command === "italic") runFormatCommand(() => editor.command.executeItalic());
+      if (command === "underline") runFormatCommand(() => editor.command.executeUnderline());
+      if (command === "strikeout") runFormatCommand(() => editor.command.executeStrikeout());
+      if (command === "superscript") runFormatCommand(() => editor.command.executeSuperscript());
+      if (command === "subscript") runFormatCommand(() => editor.command.executeSubscript());
+      if (command === "pageBreak") runFormatCommand(() => editor.command.executePageBreak());
+      if (command === "separator") runFormatCommand(() => editor.command.executeSeparator([4, 2], { lineWidth: 1, color: "#94a3b8" }));
       if (command === "save") events.onSnapshotChanged?.(toSnapshot(editor));
     },
+    setFontFamily: (fontFamily) => {
+      runFormatCommand(() => editor.command.executeFont(fontFamily));
+    },
     setFontSize: (size) => {
-      editor.command.executeSize(size);
+      runFormatCommand(() => editor.command.executeSize(size));
     },
     setColor: (color) => {
-      editor.command.executeColor(color);
+      runFormatCommand(() => editor.command.executeColor(color));
     },
-    captureFormat: () => {
-      rememberRange();
-      const selectedElements = readCurrentSelectionElementList();
-      const sourceElement = selectedElements.find(hasVisibleText) ?? selectedElements[0] ?? null;
-      if (!sourceElement && selectedElements.length === 0) return null;
-      return toFormatStateFromElement(sourceElement, lastFormatState);
+    setHighlight: (color) => {
+      runFormatCommand(() => editor.command.executeHighlight(color));
     },
-    applyFormat: (format) => {
-      rememberRange();
+    setTitleLevel: (level) => {
+      const levelMap = {
+        paragraph: null,
+        first: TitleLevel.FIRST,
+        second: TitleLevel.SECOND,
+        third: TitleLevel.THIRD,
+        fourth: TitleLevel.FOURTH,
+        fifth: TitleLevel.FIFTH,
+        sixth: TitleLevel.SIXTH
+      } as const;
+      runFormatCommand(() => editor.command.executeTitle(levelMap[level] ?? null));
+    },
+    setAlignment: (alignment: KnowledgeDocumentAlignment) => {
+      const alignmentMap = {
+        left: RowFlex.LEFT,
+        center: RowFlex.CENTER,
+        right: RowFlex.RIGHT,
+        alignment: RowFlex.ALIGNMENT,
+        justify: RowFlex.ALIGNMENT
+      } as const;
+      runFormatCommand(() => editor.command.executeRowFlex(alignmentMap[alignment]));
+    },
+    setList: (type: KnowledgeDocumentListType) => {
+      if (type === "none") {
+        runFormatCommand(() => editor.command.executeList(null));
+        return;
+      }
+      runFormatCommand(() => editor.command.executeList(type === "ul" ? ListType.UL : ListType.OL, type === "ul" ? ListStyle.DISC : ListStyle.DECIMAL));
+    },
+    insertTable: (rows, cols) => {
+      runFormatCommand(() => editor.command.executeInsertTable(rows, cols));
+    },
+    startFormatPainter: (reusable) => {
+      if (!restoreRememberedRange()) return false;
       const selectedElements = readCurrentSelectionElementList();
       if (selectedElements.length === 0) return false;
 
-      editor.command.executeInsertElementList(
-        selectedElements.map((element) => applyFormatToElement(element, format)),
-        { isReplace: true }
-      );
-      rememberRange();
-      events.onSnapshotChanged?.(toSnapshot(editor));
+      editor.command.executePainter({ isDblclick: reusable });
+      lastRange = null;
       return true;
+    },
+    clearFormatPainter: () => {
+      editor.command.executePainter({ isDblclick: false });
+      lastRange = null;
     },
     focus: () => {
       editor.command.executeFocus();
     },
     destroy: () => {
+      if (pendingFormatFrame !== null) {
+        window.cancelAnimationFrame(pendingFormatFrame);
+        pendingFormatFrame = null;
+      }
+      container.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("pointerup", finishPointerSelection);
+      window.removeEventListener("pointercancel", finishPointerSelection);
       try {
         editor.destroy();
       } catch {

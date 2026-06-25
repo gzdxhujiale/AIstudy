@@ -70,9 +70,50 @@ contextBridge.exposeInMainWorld("aistudyKnowledgeDocuments", {
   save: (request: unknown) => invokeApp("knowledge-documents:save", request)
 });
 
+contextBridge.exposeInMainWorld("aistudyMcp", {
+  state: () => invokeApp("mcp:state"),
+  setEnabled: (input: unknown) => invokeApp("mcp:set-enabled", input),
+  setToolEnabled: (input: unknown) => invokeApp("mcp:set-tool-enabled", input),
+  runTool: (input: unknown) => invokeApp("mcp:run-tool", input),
+  remoteState: () => invokeApp("mcp:remote-state"),
+  setRemoteEnabled: (input: unknown) => invokeApp("mcp:remote-set-enabled", input),
+  setRemotePermissions: (input: unknown) => invokeApp("mcp:remote-set-permissions", input),
+  refreshRemote: () => invokeApp("mcp:remote-refresh"),
+  copyRemote: () => invokeApp("mcp:remote-copy"),
+  onStateChanged: (callback: (state: unknown) => void) => {
+    const listener = (_event: IpcRendererEvent, state: unknown) => callback(state);
+    ipcRenderer.on("mcp:state-changed", listener);
+    return () => {
+      ipcRenderer.off("mcp:state-changed", listener);
+    };
+  },
+  onRemoteStateChanged: (callback: (state: unknown) => void) => {
+    const listener = (_event: IpcRendererEvent, state: unknown) => callback(state);
+    ipcRenderer.on("mcp:remote-state-changed", listener);
+    return () => {
+      ipcRenderer.off("mcp:remote-state-changed", listener);
+    };
+  },
+  onDataChanged: (callback: (change: unknown) => void) => {
+    const listener = (_event: IpcRendererEvent, change: unknown) => callback(change);
+    ipcRenderer.on("mcp:data-changed", listener);
+    return () => {
+      ipcRenderer.off("mcp:data-changed", listener);
+    };
+  }
+});
+
 contextBridge.exposeInMainWorld("aistudyChromePorts", {
   status: () => invokeApp("chrome-ports:status"),
-  openLogin: (platformId: unknown) => invokeApp("chrome-ports:open-login", platformId)
+  openLogin: (platformId: unknown) => invokeApp("chrome-ports:open-login", platformId),
+  openPage: (input: unknown) => invokeApp("chrome-ports:open-page", input)
+});
+
+contextBridge.exposeInMainWorld("aistudyInformationCollection", {
+  collectBilibili: (input: unknown) => invokeApp("information-collection:bilibili-collect", input),
+  processBilibili: (input: unknown) => invokeApp("information-collection:bilibili-process", input),
+  toolStatus: () => invokeApp("information-collection:tool-status"),
+  openBilibili: (input: unknown) => invokeApp("information-collection:open-bilibili", input)
 });
 
 contextBridge.exposeInMainWorld("aistudyAssistant", {
@@ -123,5 +164,6 @@ contextBridge.exposeInMainWorld("aistudyErrorLogs", {
 
 contextBridge.exposeInMainWorld("aistudyRuntime", {
   diagnose: () => invokeApp("runtime:diagnose"),
+  copyDiagnosticReport: () => invokeApp("runtime:copy-diagnostic-report"),
   openDataRoot: () => invokeApp("runtime:open-data-root")
 });

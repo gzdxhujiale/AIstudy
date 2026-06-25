@@ -10,6 +10,7 @@ import {
 } from "./mindMapSnapshot";
 import type {
   MindMapCommand,
+  MindMapCommandPayload,
   MindMapEditorEvents,
   MindMapEditorHandle,
   MindMapEditorOptions,
@@ -25,7 +26,7 @@ import type {
 
 type SimpleMindMapConstructor = {
   new (options: Record<string, unknown>): any;
-  usePlugin: (plugin: SimpleMindMapPlugin) => SimpleMindMapConstructor;
+  usePlugin?: (plugin: SimpleMindMapPlugin) => SimpleMindMapConstructor;
 };
 type SimpleMindMapPlugin = {
   new (options: Record<string, unknown>): any;
@@ -44,7 +45,6 @@ const MIN_NODE_TEXT_WRAP_WIDTH = 160;
 const MAX_NODE_TEXT_WRAP_WIDTH = 560;
 const INITIAL_VIEW_SCALE = 1;
 
-let pluginsRegistered = false;
 let xmindExportPluginPromise: Promise<SimpleMindMapPlugin> | null = null;
 let simpleMindMapConstructorPromise: Promise<SimpleMindMapConstructor> | null = null;
 
@@ -93,29 +93,20 @@ async function loadSimpleMindMapModules() {
     import("simple-mind-map/src/plugins/Scrollbar.js")
   ]);
   const MindMap = resolveModuleConstructor<SimpleMindMapConstructor>(mindMapModule, "simple-mind-map");
-  const Drag = resolveModuleConstructor<SimpleMindMapPlugin>(dragModule, "simple-mind-map Drag plugin");
-  const Select = resolveModuleConstructor<SimpleMindMapPlugin>(selectModule, "simple-mind-map Select plugin");
-  const KeyboardNavigation = resolveModuleConstructor<SimpleMindMapPlugin>(
-    keyboardNavigationModule,
-    "simple-mind-map KeyboardNavigation plugin"
-  );
-  const AssociativeLine = resolveModuleConstructor<SimpleMindMapPlugin>(
-    associativeLineModule,
-    "simple-mind-map AssociativeLine plugin"
-  );
-  const OuterFrame = resolveModuleConstructor<SimpleMindMapPlugin>(outerFrameModule, "simple-mind-map OuterFrame plugin");
-  const Export = resolveModuleConstructor<SimpleMindMapPlugin>(exportModule, "simple-mind-map Export plugin");
-  const Scrollbar = resolveModuleConstructor<SimpleMindMapPlugin>(scrollbarModule, "simple-mind-map Scrollbar plugin");
+  const plugins = [
+    ["simple-mind-map Drag plugin", dragModule],
+    ["simple-mind-map Select plugin", selectModule],
+    ["simple-mind-map KeyboardNavigation plugin", keyboardNavigationModule],
+    ["simple-mind-map AssociativeLine plugin", associativeLineModule],
+    ["simple-mind-map OuterFrame plugin", outerFrameModule],
+    ["simple-mind-map Export plugin", exportModule],
+    ["simple-mind-map Scrollbar plugin", scrollbarModule]
+  ] as const;
 
-  if (!pluginsRegistered) {
-    MindMap.usePlugin(Drag)
-      .usePlugin(Select)
-      .usePlugin(KeyboardNavigation)
-      .usePlugin(AssociativeLine)
-      .usePlugin(OuterFrame)
-      .usePlugin(Export)
-      .usePlugin(Scrollbar);
-    pluginsRegistered = true;
+  if (typeof MindMap.usePlugin === "function") {
+    for (const [name, module] of plugins) {
+      MindMap.usePlugin(resolveModuleConstructor<SimpleMindMapPlugin>(module, name));
+    }
   }
 
   return MindMap;
@@ -187,6 +178,12 @@ function getActiveNode(editor: any, selectedNode: any = null) {
   return activeNodes[0] ?? selectedNode ?? null;
 }
 
+function getActiveNodes(editor: any, fallbackNode: any = null) {
+  const activeNodes = Array.isArray(editor.renderer?.activeNodeList) ? editor.renderer.activeNodeList : [];
+  if (activeNodes.length > 0) return activeNodes;
+  return fallbackNode ? [fallbackNode] : [];
+}
+
 function createRuntimeNodeId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `aistudy-node-${crypto.randomUUID().replaceAll("-", "")}`;
@@ -252,7 +249,74 @@ function readActiveNodeFromEvent(editor: any, node: unknown, activeNodeList?: un
   return getActiveNode(editor);
 }
 
-function runCommand(editor: any, command: MindMapCommand, selectedNode: any = null, selectedNodeId: string | null = null) {
+function normalizePanelText(value: unknown, maxLength: number) {
+  return (typeof value === "string" ? value : "").trim().slice(0, maxLength);
+}
+
+function normalizeTags(value: unknown) {
+  const source = Array.isArray(value) ? value : [];
+  const unique = new Set<string>();
+  source.forEach((item) => {
+    const text = normalizePanelText(item, 24);
+    if (text) unique.add(text);
+  });
+  return Array.from(unique).slice(0, 8);
+}
+
+function replaceMarker(icons: unknown, markerType: "priority" | "progress", markerValue?: string | null) {
+  const source = Array.isArray(icons) ? icons.filter((item): item is string => typeof item === "string") : [];
+  const preserved = source.filter((item) => !item.startsWith(`${markerType}_`));
+  if (!markerValue) return preserved;
+  return [...preserved, `${markerType}_${markerValue}`];
+}
+
+function readMarker(icons: unknown, markerType: "priority" | "progress") {
+  const source = Array.isArray(icons) ? icons.filter((item): item is string => typeof item === "string") : [];
+  const marker = source.find((item) => item.startsWith(`${markerType}_`));
+  return marker ? marker.slice(markerType.length + 1) : "";
+}
+
+function applyTopicElementCommand(editor: any, activeNode: any, command: MindMapCommand, payload: MindMapCommandPayload = {}) {
+  const nodes = getActiveNodes(editor, activeNode);
+  if (nodes.length === 0) return;
+
+  nodes.forEach((node: any) => {
+    const data = readNodeData(node);
+    if (command === "set-note") {
+      editor.execCommand("SET_NODE_NOTE", node, normalizePanelText(payload.note, 4000));
+    }
+    if (command === "set-tags") {
+      editor.execCommand("SET_NODE_TAG", node, normalizeTags(payload.tags));
+    }
+    if (command === "set-hyperlink") {
+      editor.execCommand(
+        "SET_NODE_HYPERLINK",
+        node,
+        normalizePanelText(payload.hyperlink, 600),
+        normalizePanelText(payload.hyperlinkTitle, 80)
+      );
+    }
+    if (command === "set-image") {
+      const imageUrl = normalizePanelText(payload.imageUrl, 1200);
+      editor.execCommand("SET_NODE_IMAGE", node, imageUrl ? {
+        url: imageUrl,
+        title: normalizePanelText(payload.imageTitle, 80),
+        width: 220,
+        height: 140,
+        custom: false
+      } : { url: null });
+    }
+    if (command === "set-marker" && (payload.markerType === "priority" || payload.markerType === "progress")) {
+      editor.execCommand("SET_NODE_ICON", node, replaceMarker(data.icon, payload.markerType, payload.markerValue));
+    }
+    if (command === "toggle-expand") {
+      editor.execCommand("SET_NODE_EXPAND", node, data.expand === false);
+    }
+  });
+  editor.render?.();
+}
+
+function runCommand(editor: any, command: MindMapCommand, selectedNode: any = null, selectedNodeId: string | null = null, payload: MindMapCommandPayload = {}) {
   ensureStableRenderTreeNodeIds(editor);
   const activeNode = findCurrentRenderNode(editor, selectedNode, selectedNodeId);
   const childTarget = activeNode ?? editor.renderer?.root ?? null;
@@ -276,6 +340,14 @@ function runCommand(editor: any, command: MindMapCommand, selectedNode: any = nu
       break;
     case "add-summary":
       editor.execCommand("ADD_GENERALIZATION");
+      break;
+    case "toggle-expand":
+    case "set-note":
+    case "set-tags":
+    case "set-hyperlink":
+    case "set-image":
+    case "set-marker":
+      applyTopicElementCommand(editor, activeNode, command, payload);
       break;
     case "delete-node":
       editor.execCommand("REMOVE_CURRENT_NODE");
@@ -342,6 +414,9 @@ function normalizeTextFormat(node: any): MindMapTextFormat {
   const textDecoration = readNodeStyleValue(node, "textDecoration");
   const color = readNodeStyleValue(node, "color");
   const fontSize = Number(readNodeStyleValue(node, "fontSize"));
+  const fillColor = readNodeStyleValue(node, "fillColor");
+  const borderColor = readNodeStyleValue(node, "borderColor");
+  const borderWidth = Number(readNodeStyleValue(node, "borderWidth"));
   const customTextWidth = normalizeTextWrapWidth(data.customTextWidth);
 
   return {
@@ -350,15 +425,30 @@ function normalizeTextFormat(node: any): MindMapTextFormat {
     textDecoration: textDecoration === "underline" || textDecoration === "line-through" ? textDecoration : "none",
     color: typeof color === "string" && color ? color : "#17466f",
     fontSize: Number.isFinite(fontSize) && fontSize > 0 ? fontSize : MIND_MAP_DEFAULT_FONT_SIZE,
-    textAutoWrapWidth: customTextWidth
+    textAutoWrapWidth: customTextWidth,
+    fillColor: typeof fillColor === "string" && fillColor ? fillColor : "#ffffff",
+    borderColor: typeof borderColor === "string" && borderColor ? borderColor : "#72a9d8",
+    borderWidth: Number.isFinite(borderWidth) && borderWidth >= 0 ? borderWidth : 1
   };
 }
 
 function toSelectedNode(node: unknown): MindMapSelectedNode {
+  const data = readNodeData(node);
   return {
     id: extractNodeId(node),
     title: extractNodeTitle(node),
-    textFormat: normalizeTextFormat(node)
+    textFormat: normalizeTextFormat(node),
+    topicElements: {
+      note: typeof data.note === "string" ? data.note : "",
+      tags: normalizeTags(data.tag),
+      hyperlink: typeof data.hyperlink === "string" ? data.hyperlink : "",
+      hyperlinkTitle: typeof data.hyperlinkTitle === "string" ? data.hyperlinkTitle : "",
+      imageUrl: typeof data.image === "string" ? data.image : "",
+      imageTitle: typeof data.imageTitle === "string" ? data.imageTitle : "",
+      priority: readMarker(data.icon, "priority"),
+      progress: readMarker(data.icon, "progress"),
+      expanded: data.expand !== false
+    }
   };
 }
 
@@ -384,6 +474,16 @@ function normalizeTextFormatPatch(patch: MindMapTextFormatPatch) {
   if (hasPatchKey(patch, "fontSize")) {
     const fontSize = Number(patch.fontSize);
     next.fontSize = Number.isFinite(fontSize) ? Math.min(32, Math.max(11, Math.round(fontSize))) : MIND_MAP_DEFAULT_FONT_SIZE;
+  }
+  if (hasPatchKey(patch, "fillColor")) {
+    next.fillColor = typeof patch.fillColor === "string" && /^#[0-9a-f]{6}$/i.test(patch.fillColor) ? patch.fillColor : "#ffffff";
+  }
+  if (hasPatchKey(patch, "borderColor")) {
+    next.borderColor = typeof patch.borderColor === "string" && /^#[0-9a-f]{6}$/i.test(patch.borderColor) ? patch.borderColor : "#72a9d8";
+  }
+  if (hasPatchKey(patch, "borderWidth")) {
+    const borderWidth = Number(patch.borderWidth);
+    next.borderWidth = Number.isFinite(borderWidth) ? Math.min(6, Math.max(0, Math.round(borderWidth))) : 1;
   }
 
   return Object.fromEntries(Object.entries(next).filter(([, value]) => value !== undefined && value !== null)) as Record<string, string | number>;
@@ -600,7 +700,7 @@ export async function createSimpleMindMapEditor(
     openRealtimeRenderOnNodeTextEdit: false,
     isLimitMindMapInCanvas: false,
     isLimitMindMapInCanvasWhenHasScrollbar: false,
-    enableFreeDrag: true,
+    enableFreeDrag: false,
     defaultInsertSecondLevelNodeText: "新主题",
     defaultInsertBelowSecondLevelNodeText: "新主题",
     defaultAssociativeLineText: "关系",
@@ -810,9 +910,9 @@ export async function createSimpleMindMapEditor(
       if (destroyed) return null;
       return applySelectedTextFormat(editor, patch);
     },
-    exec: (command) => {
+    exec: (command, payload) => {
       if (destroyed) return;
-      runCommand(editor, command, selectedRenderNode, selectedNodeId);
+      runCommand(editor, command, selectedRenderNode, selectedNodeId, payload);
       if (shouldSyncAfterCommand(command)) {
         window.setTimeout(() => {
           if (!destroyed) {

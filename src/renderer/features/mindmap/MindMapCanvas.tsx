@@ -9,6 +9,7 @@ import {
 import { createSimpleMindMapEditor } from "./simpleMindMapAdapter";
 import type {
   MindMapCommand,
+  MindMapCommandPayload,
   MindMapEditorHandle,
   MindMapExportType,
   MindMapLayoutType,
@@ -18,7 +19,7 @@ import type {
 } from "./mindMapTypes";
 
 export type MindMapCanvasHandle = {
-  exec: (command: MindMapCommand) => void;
+  exec: (command: MindMapCommand, payload?: MindMapCommandPayload) => void;
   selectNode: (nodeId: string) => MindMapSelectedNode | null;
   setLayout: (layout: MindMapLayoutType) => MindMapSnapshot | null;
   applyTextFormat: (patch: MindMapTextFormatPatch) => MindMapSelectedNode | null;
@@ -34,10 +35,11 @@ type MindMapCanvasProps = {
   onNodeSelected: (node: MindMapSelectedNode) => void;
   onReadyChange: (ready: boolean) => void;
   onError: (message: string) => void;
+  onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
 };
 
 export const MindMapCanvas = React.forwardRef<MindMapCanvasHandle, MindMapCanvasProps>(function MindMapCanvas(
-  { snapshot, canvasDragEnabled, onSnapshotChanged, onNodeSelected, onReadyChange, onError },
+  { snapshot, canvasDragEnabled, onSnapshotChanged, onNodeSelected, onReadyChange, onError, onContextMenu },
   ref
 ) {
   const mountRef = React.useRef<HTMLDivElement | null>(null);
@@ -79,7 +81,7 @@ export const MindMapCanvas = React.forwardRef<MindMapCanvasHandle, MindMapCanvas
   React.useImperativeHandle(
     ref,
     () => ({
-      exec: (command) => editorRef.current?.exec(command),
+      exec: (command, payload) => editorRef.current?.exec(command, payload),
       selectNode: (nodeId) => editorRef.current?.selectNode(nodeId) ?? null,
       setLayout: (layout) => editorRef.current?.setLayout(layout) ?? null,
       applyTextFormat: (patch) => editorRef.current?.applyTextFormat(patch) ?? null,
@@ -188,7 +190,7 @@ export const MindMapCanvas = React.forwardRef<MindMapCanvasHandle, MindMapCanvas
   }, []);
 
   return (
-    <div className="mindmap-canvas-frame">
+    <div className="mindmap-canvas-frame" onContextMenu={onContextMenu}>
       <div ref={mountRef} className="mindmap-canvas-host" />
       <ViewportScrollbars
         className="mindmap-viewport-scrollbars"

@@ -5,6 +5,7 @@ release/
 release-*/
 artifacts/
 .tmp/
+.runtime/
 .vite/
 *.log
 *.user

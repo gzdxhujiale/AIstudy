@@ -3,6 +3,11 @@ declare module "simple-mind-map" {
   export default MindMap;
 }
 
+declare module "simple-mind-map/full" {
+  const MindMap: any;
+  export default MindMap;
+}
+
 declare module "simple-mind-map/src/plugins/Drag.js" {
   const plugin: any;
   export default plugin;
