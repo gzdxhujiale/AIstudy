@@ -669,6 +669,12 @@ export function KnowledgeDocumentWorkspace({
 
   const handleEditorKeyDownCapture = React.useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Enter" && editorRef.current?.cancelBlankListOnEnter()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       if (event.key !== "Escape" || !formatBrushRef.current) return;
       event.preventDefault();
       event.stopPropagation();

@@ -89,6 +89,7 @@ export type KnowledgeDocumentEditorHandle = {
   setTitleLevel: (level: KnowledgeDocumentTitleLevel) => void;
   setAlignment: (alignment: KnowledgeDocumentAlignment) => void;
   setList: (type: KnowledgeDocumentListType) => void;
+  cancelBlankListOnEnter: () => boolean;
   insertTable: (rows: number, cols: number) => void;
   startFormatPainter: (reusable: boolean) => boolean;
   clearFormatPainter: () => void;

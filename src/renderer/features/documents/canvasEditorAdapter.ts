@@ -163,6 +163,10 @@ function createSmartListId() {
   return `smart-ol-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function getVisibleElementText(element: IElement) {
+  return toElementText(element.value).replace(new RegExp(ZERO_WIDTH_BREAK, "g"), "").trim();
+}
+
 function findParagraphBounds(elementList: IElement[], index: number) {
   let start = 0;
   let end = elementList.length - 1;
@@ -517,6 +521,26 @@ export async function createCanvasDocumentEditor(
       changed
     };
   };
+  const cancelBlankListOnEnter = () => {
+    const range = rememberRange();
+    if (!range || range.tableId || (range.zone && range.zone !== "main")) return false;
+
+    const elementList = normalizeEditorData(editor.command.getValue().data).main;
+    if (elementList.length === 0) return false;
+
+    const startIndex = Math.max(0, Math.min(range.startIndex, elementList.length - 1));
+    const endIndex = Math.max(startIndex, Math.min(range.endIndex, elementList.length - 1));
+    const selectedElements = elementList.slice(startIndex, endIndex + 1).filter(isTextElement);
+    if (selectedElements.length === 0) return false;
+
+    const hasOrderedBlankLine = selectedElements.some((element) => element.listType === ListType.OL);
+    const hasVisibleTextInSelection = selectedElements.some((element) => getVisibleElementText(element).length > 0);
+    const hasNonOrderedText = selectedElements.some((element) => element.listType !== ListType.OL && getVisibleElementText(element).length > 0);
+    if (!hasOrderedBlankLine || hasVisibleTextInSelection || hasNonOrderedText) return false;
+
+    runFormatCommand(() => editor.command.executeList(null));
+    return true;
+  };
   const readCurrentSelectionElementList = () => {
     try {
       return editor.command.getRangeContext()?.selectionElementList ?? [];
@@ -667,6 +691,7 @@ export async function createCanvasDocumentEditor(
       }
       runFormatCommand(() => editor.command.executeList(type === "ul" ? ListType.UL : ListType.OL, type === "ul" ? ListStyle.DISC : ListStyle.DECIMAL));
     },
+    cancelBlankListOnEnter,
     insertTable: (rows, cols) => {
       runFormatCommand(() => editor.command.executeInsertTable(rows, cols));
     },
