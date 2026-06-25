@@ -365,15 +365,28 @@ export function createEmptyKnowledgeDocumentSnapshot(): KnowledgeDocumentSnapsho
   };
 }
 
-function toSnapshot(editor: CanvasEditorInstance): KnowledgeDocumentSnapshot {
-  const value = editor.command.getValue();
+function createSnapshotFromEditorData(data: unknown): KnowledgeDocumentSnapshot {
   return {
     schemaVersion: AISTUDY_CORE_CONTRACT.schemaVersion,
     editor: DOCUMENT_EDITOR,
     editorVersion: DOCUMENT_EDITOR_VERSION,
-    content: normalizeEditorData(value.data) as KnowledgeDocumentContent,
+    content: normalizeEditorData(data as KnowledgeDocumentContent) as KnowledgeDocumentContent,
     updatedAt: new Date().toISOString()
   };
+}
+
+function toSnapshot(editor: CanvasEditorInstance): KnowledgeDocumentSnapshot {
+  const value = editor.command.getValue();
+  return createSnapshotFromEditorData(value.data);
+}
+
+async function toSnapshotAsync(editor: CanvasEditorInstance): Promise<KnowledgeDocumentSnapshot> {
+  try {
+    const value = await editor.command.getValueAsync();
+    return createSnapshotFromEditorData(value.data);
+  } catch {
+    return toSnapshot(editor);
+  }
 }
 
 function toFormatState(payload: IRangeStyle): KnowledgeDocumentFormatState {
@@ -475,6 +488,10 @@ export async function createCanvasDocumentEditor(
   let lastRange: CanvasRange | null = null;
   let pendingSnapshotTimer: number | null = null;
   let pendingSnapshotIdle: number | null = null;
+  let pendingNormalizeTimer: number | null = null;
+  let pendingNormalizeIdle: number | null = null;
+  let snapshotRequestId = 0;
+  let normalizationRequestId = 0;
   let pendingFormatFrame: number | null = null;
   let pendingFormatState: KnowledgeDocumentFormatState | null = null;
   let lastFormatState: KnowledgeDocumentFormatState = {
@@ -534,10 +551,31 @@ export async function createCanvasDocumentEditor(
       pendingSnapshotIdle = null;
     }
   };
+  const clearPendingNormalizeTask = () => {
+    if (pendingNormalizeTimer !== null) {
+      window.clearTimeout(pendingNormalizeTimer);
+      pendingNormalizeTimer = null;
+    }
+    if (pendingNormalizeIdle !== null) {
+      window.cancelIdleCallback?.(pendingNormalizeIdle);
+      pendingNormalizeIdle = null;
+    }
+  };
   const emitSnapshotNow = () => {
     clearPendingSnapshotTask();
+    snapshotRequestId += 1;
     const nextSnapshot = toSnapshot(editor);
     events.onSnapshotChanged?.(nextSnapshot);
+    return nextSnapshot;
+  };
+  const emitSnapshotNowAsync = async () => {
+    clearPendingSnapshotTask();
+    const requestId = snapshotRequestId + 1;
+    snapshotRequestId = requestId;
+    const nextSnapshot = await toSnapshotAsync(editor);
+    if (requestId === snapshotRequestId) {
+      events.onSnapshotChanged?.(nextSnapshot);
+    }
     return nextSnapshot;
   };
   const scheduleSnapshot = () => {
@@ -547,7 +585,13 @@ export async function createCanvasDocumentEditor(
       const flush = () => {
         pendingSnapshotTimer = null;
         pendingSnapshotIdle = null;
-        events.onSnapshotChanged?.(toSnapshot(editor));
+        const requestId = snapshotRequestId + 1;
+        snapshotRequestId = requestId;
+        void toSnapshotAsync(editor).then((nextSnapshot) => {
+          if (requestId === snapshotRequestId) {
+            events.onSnapshotChanged?.(nextSnapshot);
+          }
+        });
       };
       if (window.requestIdleCallback) {
         pendingSnapshotIdle = window.requestIdleCallback(flush, { timeout: 1500 });
@@ -556,12 +600,51 @@ export async function createCanvasDocumentEditor(
       pendingSnapshotTimer = window.setTimeout(flush, 0);
     }, 650);
   };
+  const normalizeCurrentContentAsync = async (requestId: number) => {
+    if (isNormalizingInputStyle) return;
+    const range = editor.command.getRange();
+    const currentValue = await editor.command.getValueAsync();
+    if (requestId !== normalizationRequestId || isNormalizingInputStyle) return;
+
+    let nextContent = normalizeLiveEditorData(currentValue.data);
+    const normalizedInputStyle = inheritDocumentInputStyle(nextContent, range);
+    nextContent = normalizedInputStyle.content;
+    const normalizedLists = normalizeOrderedLists(nextContent);
+    nextContent = normalizedLists.content;
+
+    if (!normalizedInputStyle.changed && !normalizedLists.changed) return;
+    isNormalizingInputStyle = true;
+    try {
+      editor.command.executeSetValue(nextContent, { isSetCursor: false });
+      restoreRange(editor, range, nextContent.main.length);
+    } finally {
+      isNormalizingInputStyle = false;
+    }
+  };
+  const scheduleContentNormalization = () => {
+    normalizationRequestId += 1;
+    const requestId = normalizationRequestId;
+    clearPendingNormalizeTask();
+    pendingNormalizeTimer = window.setTimeout(() => {
+      pendingNormalizeTimer = null;
+      const flush = () => {
+        pendingNormalizeTimer = null;
+        pendingNormalizeIdle = null;
+        void normalizeCurrentContentAsync(requestId).catch(() => undefined);
+      };
+      if (window.requestIdleCallback) {
+        pendingNormalizeIdle = window.requestIdleCallback(flush, { timeout: 1200 });
+        return;
+      }
+      pendingNormalizeTimer = window.setTimeout(flush, 0);
+    }, 280);
+  };
   const runFormatCommand = (action: () => void) => {
     hasUserEdited = true;
     restoreRememberedRange();
     action();
     rememberRange();
-    emitSnapshotNow();
+    scheduleSnapshot();
   };
   const normalizeOrderedLists = (content: IEditorData) => {
     let changed = false;
@@ -704,6 +787,7 @@ export async function createCanvasDocumentEditor(
   const finishPointerSelection = () => {
     if (!isPointerSelecting) return;
     isPointerSelecting = false;
+    rememberRange();
     if (!pendingFormatState || pendingFormatFrame !== null) return;
     pendingFormatFrame = window.requestAnimationFrame(flushFormatState);
   };
@@ -739,28 +823,16 @@ export async function createCanvasDocumentEditor(
       return;
     }
 
-    const range = editor.command.getRange();
-    const currentValue = editor.command.getValue();
-    let nextContent = normalizeLiveEditorData(currentValue.data);
-    const normalizedInputStyle = inheritDocumentInputStyle(nextContent, range);
-    nextContent = normalizedInputStyle.content;
-    const normalizedLists = normalizeOrderedLists(nextContent);
-    nextContent = normalizedLists.content;
-
-    if (normalizedInputStyle.changed || normalizedLists.changed) {
-      isNormalizingInputStyle = true;
-      try {
-        editor.command.executeSetValue(nextContent, { isSetCursor: false });
-        restoreRange(editor, range, nextContent.main.length);
-      } finally {
-        isNormalizingInputStyle = false;
-      }
-    }
-
+    scheduleContentNormalization();
     scheduleSnapshot();
   };
   editor.listener.rangeStyleChange = (payload) => {
-    scheduleFormatState(toFormatState(payload));
+    const nextState = toFormatState(payload);
+    if (isPointerSelecting) {
+      pendingFormatState = nextState;
+      return;
+    }
+    scheduleFormatState(nextState);
     rememberRange();
   };
   editor.register.contextMenuList([
@@ -777,8 +849,10 @@ export async function createCanvasDocumentEditor(
   return {
     getSnapshot: () => {
       clearPendingSnapshotTask();
+      snapshotRequestId += 1;
       return toSnapshot(editor);
     },
+    getSnapshotAsync: emitSnapshotNowAsync,
     getSelectedText: () => rememberSelectedText() || lastSelectedText,
     hasSelection: () => {
       if (!restoreRememberedRange()) return false;
@@ -796,7 +870,7 @@ export async function createCanvasDocumentEditor(
       if (command === "subscript") runFormatCommand(() => editor.command.executeSubscript());
       if (command === "pageBreak") runFormatCommand(() => editor.command.executePageBreak());
       if (command === "separator") runFormatCommand(() => editor.command.executeSeparator([4, 2], { lineWidth: 1, color: "#94a3b8" }));
-      if (command === "save") emitSnapshotNow();
+      if (command === "save") void emitSnapshotNowAsync();
     },
     setFontFamily: (fontFamily) => {
       runFormatCommand(() => editor.command.executeFont(fontFamily));
@@ -864,6 +938,8 @@ export async function createCanvasDocumentEditor(
         clearPendingSnapshotTask();
         events.onSnapshotChanged?.(toSnapshot(editor));
       }
+      normalizationRequestId += 1;
+      clearPendingNormalizeTask();
       if (pendingFormatFrame !== null) {
         window.cancelAnimationFrame(pendingFormatFrame);
         pendingFormatFrame = null;

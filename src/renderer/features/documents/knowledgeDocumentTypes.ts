@@ -79,6 +79,7 @@ export type KnowledgeDocumentFormatState = {
 
 export type KnowledgeDocumentEditorHandle = {
   getSnapshot: () => KnowledgeDocumentSnapshot;
+  getSnapshotAsync: () => Promise<KnowledgeDocumentSnapshot>;
   getSelectedText: () => string;
   hasSelection: () => boolean;
   exec: (command: KnowledgeDocumentCommand) => void;

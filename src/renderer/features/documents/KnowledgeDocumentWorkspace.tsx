@@ -1160,11 +1160,12 @@ export function KnowledgeDocumentWorkspace({
 
   React.useEffect(() => registerBeforeCloseSave(() => flushPendingSave(true)), [flushPendingSave]);
 
-  const saveNow = React.useCallback(() => {
-    if (!documentBinding) return Promise.resolve(null);
-    if (!documentDirtyRef.current && !pendingSaveRef.current) return Promise.resolve(null);
-    const nextSnapshot = editorRef.current?.getSnapshot() ?? latestSnapshotRef.current ?? snapshot;
-    if (!nextSnapshot) return Promise.resolve(null);
+  const saveNow = React.useCallback(async () => {
+    if (!documentBinding) return null;
+    if (!documentDirtyRef.current && !pendingSaveRef.current) return null;
+    const currentEditor = editorRef.current;
+    const nextSnapshot = currentEditor ? await currentEditor.getSnapshotAsync() : latestSnapshotRef.current ?? snapshot;
+    if (!nextSnapshot) return null;
     latestSnapshotRef.current = nextSnapshot;
     pendingSaveRef.current = {
       ...documentBinding,
