@@ -310,6 +310,20 @@ type MysqlRuntime = {
   errorLogTable: string;
 };
 
+const PUBLIC_MYSQL_DATABASE = "aistudy_public";
+const PUBLIC_MYSQL_TABLES = {
+  courses: "course_management_courses",
+  sections: "knowledge_sections",
+  mindMaps: "mind_maps",
+  mindMapSnapshots: "mind_map_snapshots",
+  mindMapNodes: "mind_map_nodes",
+  documents: "knowledge_documents",
+  documentSnapshots: "knowledge_document_snapshots",
+  assets: "knowledge_assets",
+  assetLinks: "knowledge_asset_links",
+  errorLogs: "app_error_logs"
+} as const;
+
 type AppErrorLogRow = RowDataPacket & {
   id: string;
   source: string;
@@ -329,6 +343,10 @@ type MindMapRow = RowDataPacket & {
 
 type MindMapSnapshotRow = RowDataPacket & {
   payloadJson: string;
+};
+
+type CourseNameRow = RowDataPacket & {
+  name: string;
 };
 
 type SnapshotMetaRow = RowDataPacket & {
@@ -3342,34 +3360,6 @@ async function readMysqlConfigFile(filePath: string) {
   }
 }
 
-function uniquePaths(paths: string[]) {
-  const seen = new Set<string>();
-  return paths.filter((item) => {
-    const normalized = path.normalize(item).toLowerCase();
-    if (seen.has(normalized)) return false;
-    seen.add(normalized);
-    return true;
-  });
-}
-
-function getLegacyAistudyDataRoots() {
-  const exeDir = isDev ? app.getAppPath() : path.dirname(app.getPath("exe"));
-  const roots = [
-    path.join(exeDir, "AIstudyData"),
-    "F:\\AIstudyData",
-    path.join(app.getPath("userData"), "AIstudyData")
-  ];
-  return uniquePaths(roots).filter((root) => root !== getAistudyDataRoot());
-}
-
-async function readFirstExistingMysqlConfigFile(filePaths: string[]) {
-  for (const filePath of uniquePaths(filePaths)) {
-    const config = await readMysqlConfigFile(filePath);
-    if (Object.keys(config).length > 0) return config;
-  }
-  return {};
-}
-
 function readPublicRuntimeEnv(name: string) {
   return process.env[`AISTUDY_PUBLIC_${name}`] ?? process.env[`AISTUDY_${name}`];
 }
@@ -3433,94 +3423,12 @@ async function createCourseLocatorFile(input: CourseLocatorRequest) {
   return locatorPath;
 }
 
-function hasExplicitMysqlDatabaseConfig(mergedConfig: Partial<MysqlConfig>) {
-  return getStringSetting(readPublicMysqlEnv("DATABASE"), "") !== "" || getStringSetting(readSetting(mergedConfig, "database"), "") !== "";
-}
-
-async function mysqlDatabaseHasApplicationData(
-  connection: Connection,
-  database: string,
-  tableNames: string[]
-) {
-  validateMysqlIdentifier(database, "MySQL database");
-  const [schemaRows] = await connection.execute<RowDataPacket[]>(
-    `SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ? LIMIT 1`,
-    [database]
-  );
-  if (schemaRows.length === 0) return 0;
-
-  let score = 1;
-  for (const tableName of tableNames) {
-    validateMysqlIdentifier(tableName, "MySQL table");
-    const [tableRows] = await connection.execute<RowDataPacket[]>(
-      `SELECT TABLE_NAME
-       FROM INFORMATION_SCHEMA.TABLES
-       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
-       LIMIT 1`,
-      [database, tableName]
-    );
-    if (tableRows.length === 0) continue;
-    score += 5;
-
-    const [countRows] = await connection.query<RowDataPacket[]>(
-      `SELECT COUNT(*) AS rowCount FROM ${escapeMysqlIdentifier(database, "MySQL database")}.${escapeMysqlIdentifier(tableName, "MySQL table")}`
-    );
-    const rowCount = Number(countRows[0]?.rowCount) || 0;
-    score += Math.min(rowCount, 1000) * 10;
-  }
-  return score;
-}
-
-async function detectMysqlDatabase(config: MysqlConfig, defaultDatabase: string) {
-  const candidates = Array.from(new Set([defaultDatabase, "aistudy_public", "aistudy"].filter(Boolean)));
-  const connection = await mysql.createConnection({
-    host: config.host,
-    port: config.port,
-    user: config.user,
-    password: config.password
-  });
-
-  try {
-    const tableNames = [
-      config.courseTable,
-      config.courseSectionTable,
-      config.mindMapTable,
-      config.mindMapNodeTable,
-      config.knowledgeDocumentTable,
-      config.knowledgeDocumentSnapshotTable
-    ];
-    const scored = [];
-    for (const database of candidates) {
-      scored.push({
-        database,
-        score: await mysqlDatabaseHasApplicationData(connection, database, tableNames)
-      });
-    }
-    scored.sort((left, right) => right.score - left.score);
-    const best = scored[0];
-    const defaultScore = scored.find((item) => item.database === defaultDatabase)?.score ?? 0;
-    if (best && best.database !== defaultDatabase && best.score > Math.max(defaultScore, 1)) {
-      console.info(`AIstudy selected existing MySQL database "${best.database}" instead of empty/default "${defaultDatabase}".`);
-      return best.database;
-    }
-  } finally {
-    await connection.end();
-  }
-
-  return defaultDatabase;
-}
-
 async function readMysqlConfig(): Promise<MysqlConfig> {
   const executableConfig = await readMysqlConfigFile(path.join(path.dirname(process.execPath), "mysql.config.json"));
-  const legacyDataRootConfig = await readFirstExistingMysqlConfigFile(
-    getLegacyAistudyDataRoots().map((root) => path.join(root, "config", "mysql.config.json"))
-  );
   const dataRootConfig = await readMysqlConfigFile(getAistudyDataPath("config", "mysql.config.json"));
   const userConfig = await readMysqlConfigFile(path.join(app.getPath("userData"), "mysql.config.json"));
-  const mergedConfig = { ...executableConfig, ...legacyDataRootConfig, ...dataRootConfig, ...userConfig };
-  const explicitDatabase = hasExplicitMysqlDatabaseConfig(mergedConfig);
+  const mergedConfig = { ...executableConfig, ...dataRootConfig, ...userConfig };
 
-  const configuredDatabase = getStringSetting(readPublicMysqlEnv("DATABASE"), getStringSetting(readSetting(mergedConfig, "database"), "aistudy_public"));
   const config = {
     host: getStringSetting(readPublicMysqlEnv("HOST"), getStringSetting(readSetting(mergedConfig, "host"), "127.0.0.1")),
     port: parsePort(readPublicMysqlEnv("PORT"), parsePort(readSetting(mergedConfig, "port"), 3306)),
@@ -3528,56 +3436,18 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
     password: typeof readPublicMysqlEnv("PASSWORD") === "string"
       ? readPublicMysqlEnv("PASSWORD") ?? ""
         : getStringSetting(readSetting(mergedConfig, "password"), ""),
-    database: configuredDatabase,
-    courseTable: getStringSetting(
-      readPublicMysqlEnv("COURSE_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "courseTable"), "course_management_courses")
-    ),
-    courseSectionTable: getStringSetting(
-      readPublicMysqlEnv("COURSE_SECTION_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "courseSectionTable"), "knowledge_sections")
-    ),
-    mindMapTable: getStringSetting(
-      readPublicMysqlEnv("MIND_MAP_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "mindMapTable"), "mind_maps")
-    ),
-    mindMapSnapshotTable: getStringSetting(
-      readPublicMysqlEnv("MIND_MAP_SNAPSHOT_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "mindMapSnapshotTable"), "mind_map_snapshots")
-    ),
-    mindMapNodeTable: getStringSetting(
-      readPublicMysqlEnv("MIND_MAP_NODE_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "mindMapNodeTable"), "mind_map_nodes")
-    ),
-    knowledgeDocumentTable: getStringSetting(
-      readPublicMysqlEnv("KNOWLEDGE_DOCUMENT_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "knowledgeDocumentTable"), "knowledge_documents")
-    ),
-    knowledgeDocumentSnapshotTable: getStringSetting(
-      readPublicMysqlEnv("KNOWLEDGE_DOCUMENT_SNAPSHOT_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "knowledgeDocumentSnapshotTable"), "knowledge_document_snapshots")
-    ),
-    assetTable: getStringSetting(
-      readPublicMysqlEnv("ASSET_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "assetTable"), "knowledge_assets")
-    ),
-    knowledgeAssetLinkTable: getStringSetting(
-      readPublicMysqlEnv("KNOWLEDGE_ASSET_LINK_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "knowledgeAssetLinkTable"), "knowledge_asset_links")
-    ),
-    errorLogTable: getStringSetting(
-      readPublicMysqlEnv("ERROR_LOG_TABLE"),
-      getStringSetting(readSetting(mergedConfig, "errorLogTable"), "app_error_logs")
-    )
+    database: PUBLIC_MYSQL_DATABASE,
+    courseTable: PUBLIC_MYSQL_TABLES.courses,
+    courseSectionTable: PUBLIC_MYSQL_TABLES.sections,
+    mindMapTable: PUBLIC_MYSQL_TABLES.mindMaps,
+    mindMapSnapshotTable: PUBLIC_MYSQL_TABLES.mindMapSnapshots,
+    mindMapNodeTable: PUBLIC_MYSQL_TABLES.mindMapNodes,
+    knowledgeDocumentTable: PUBLIC_MYSQL_TABLES.documents,
+    knowledgeDocumentSnapshotTable: PUBLIC_MYSQL_TABLES.documentSnapshots,
+    assetTable: PUBLIC_MYSQL_TABLES.assets,
+    knowledgeAssetLinkTable: PUBLIC_MYSQL_TABLES.assetLinks,
+    errorLogTable: PUBLIC_MYSQL_TABLES.errorLogs
   };
-
-  if (!explicitDatabase) {
-    try {
-      config.database = await detectMysqlDatabase(config, configuredDatabase);
-    } catch (error) {
-      console.warn("AIstudy MySQL database auto-detection failed. Continuing with default database.", error);
-    }
-  }
 
   validateMysqlIdentifier(config.database, "MySQL database");
   validateMysqlIdentifier(config.courseTable, "MySQL course table");
@@ -6636,7 +6506,7 @@ async function softDeleteKnowledgeDocumentsForMissingNodes(
 
 async function writeMindMapDocument(input: unknown): Promise<MindMapDocument> {
   const request = normalizeMindMapSaveRequest(input);
-  const { pool, mindMapTable, mindMapSnapshotTable, mindMapNodeTable, knowledgeDocumentTable } = await getMysqlRuntime();
+  const { pool, courseTable, mindMapTable, mindMapSnapshotTable, mindMapNodeTable } = await getMysqlRuntime();
   const connection = await pool.getConnection();
   const now = new Date();
   const updatedAt = now.toISOString();
@@ -6648,13 +6518,38 @@ async function writeMindMapDocument(input: unknown): Promise<MindMapDocument> {
       ? await findMindMapById(connection, mindMapTable, request.courseId, request.mapId, true)
       : await findMindMapByCourse(connection, mindMapTable, request.courseId, true);
     const mapId = request.mapId ?? existing?.id ?? createEntityId("mindmap");
-    const title = (request.title || getNodeTitle(request.snapshot.root, "Mind map")).slice(0, 255);
+    const rootTitle = getNodeTitle(request.snapshot.root, "Mind map").slice(0, 255);
+    const title = (request.title || rootTitle).slice(0, 255);
     const nodes = flattenMindMapNodes(request.snapshot.root, null, 0, 0, "root", []);
     const rootNodeId = nodes[0]?.nodeId ?? "root";
     const payloadJson = createSnapshotPayloadJson(request.snapshot, updatedAt);
     const payloadHash = createSnapshotContentHash(request.snapshot);
     const byteSize = Buffer.byteLength(payloadJson, "utf8");
     assertSnapshotStorageContract("Mind map", request.snapshot, byteSize, AISTUDY_CORE_CONTRACT.mindMap.maxSnapshotBytes);
+
+    if (existing) {
+      const [courseRows] = await connection.execute<CourseNameRow[]>(
+        `SELECT name FROM ${courseTable} WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+        [request.courseId]
+      );
+      const expectedTitles = new Set(
+        [existing.title, courseRows[0]?.name]
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .map((value) => value.trim())
+      );
+      const incomingTitles = new Set(
+        [rootTitle, request.title]
+          .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+          .map((value) => value.trim())
+      );
+      const matchedTitle = [...incomingTitles].some((value) => expectedTitles.has(value));
+      if (expectedTitles.size > 0 && !matchedTitle) {
+        throw createAppError(
+          "APP_INVALID_ARGUMENT",
+          "导图保存目标不一致，已阻止覆盖其他知识库内容。请重新打开当前知识库后再保存。"
+        );
+      }
+    }
 
     const currentSnapshotMeta = existing?.currentSnapshotId
       ? await readSnapshotMeta(connection, mindMapSnapshotTable, existing.currentSnapshotId, "mind_map_id", mapId)
@@ -6700,14 +6595,6 @@ async function writeMindMapDocument(input: unknown): Promise<MindMapDocument> {
     }
 
     await upsertMindMapNodes(connection, mindMapNodeTable, request.courseId, mapId, nodes, now);
-    await softDeleteKnowledgeDocumentsForMissingNodes(
-      connection,
-      knowledgeDocumentTable,
-      request.courseId,
-      mapId,
-      nodes.map((node) => node.nodeId),
-      now
-    );
     await connection.commit();
 
     return {

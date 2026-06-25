@@ -175,9 +175,20 @@ Authorization: Bearer ...
 
 - `list_node_documents`：列出全库或指定知识库里已有节点文档。
 - `read_node_document`：读取指定节点绑定的文档。
-- `write_node_document`：写入或覆盖节点文档，可传纯文本或完整文档快照。
-- `append_node_document`：在节点文档末尾追加文本。
-- `update_node_document_style`：为节点文档全文应用字号、颜色、粗体、斜体、下划线。
+- `write_node_document`：创建节点文档或在明确授权时覆盖整篇。节点已有内容时，必须显式传 `replaceExisting: true` 才允许覆盖；不要把它当作“排版工具”使用。
+- `append_node_document`：在节点文档末尾追加干净文本或 Markdown 标题。
+- `format_node_document`：只做已有节点文档的样式清理。它必须逐字保留每一个编辑器元素的 `value`，不得改写文字、修剪空白、删除空行、插入空行、缩进、拆段或合段。
+- `update_node_document_style`：只做全文字号、颜色、粗体、斜体、下划线等简单样式调整；不得拆段、加空行或重写内容。
+
+文档写入规则：
+
+- 不要手写 canvas-editor 内部元素来拼排版。
+- 不要在 `value` 中塞大量 `\n\n` 来制造间距。
+- 不要为了“改排版”调用 `write_node_document` 覆盖整篇文档。
+- 节点已有文档时，`write_node_document` 默认会拒绝覆盖；只有用户明确要求“整篇重写/覆盖”时才传 `replaceExisting: true`。
+- 新内容写入用 `write_node_document`，补内容用 `append_node_document`，不改内容的样式清理用 `format_node_document`，简单全文样式用 `update_node_document_style`。
+- `format_node_document` 写入前必须校验元素数量一致、所有 `value` 逐字一致；校验失败必须中断，不得写入。
+- MCP 不再把“清理空行、缩进正文、重排段落”当作安全排版。需要改变正文结构时，必须先读全文、让用户确认，再用 `write_node_document` 重建整篇。
 
 ### 本地定位和交接
 

@@ -12,7 +12,7 @@ export const AISTUDY_CORE_CONTRACT = Object.freeze({
     maxSnapshotBytes: 5 * 1024 * 1024
   },
   knowledgeDocument: {
-    snapshotRetentionLimit: 16,
+    snapshotRetentionLimit: 80,
     maxSnapshotBytes: 2 * 1024 * 1024
   },
   storage: {

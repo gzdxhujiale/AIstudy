@@ -73,6 +73,7 @@
 
 - `write_node_document`
 - `append_node_document`
+- `format_node_document`
 - `update_node_document_style`
 
 远程访问不开放定位文件生成和复制配置。

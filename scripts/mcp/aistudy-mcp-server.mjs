@@ -13,6 +13,16 @@ const MINDMAP_EDITOR = "simple-mind-map";
 const DEFAULT_LAYOUT = "logicalStructure";
 const DOCUMENT_EDITOR = "aistudy-word";
 const DOCUMENT_EDITOR_VERSION = "mcp-text";
+const PUBLIC_MYSQL_DATABASE = "aistudy_public";
+const PUBLIC_MYSQL_TABLES = {
+  courses: "course_management_courses",
+  sections: "knowledge_sections",
+  mindMaps: "mind_maps",
+  mindMapSnapshots: "mind_map_snapshots",
+  mindMapNodes: "mind_map_nodes",
+  documents: "knowledge_documents",
+  documentSnapshots: "knowledge_document_snapshots"
+};
 const MINDMAP_LAYOUTS = new Set([
   "logicalStructure",
   "logicalStructureLeft",
@@ -234,21 +244,28 @@ const toolDefinitions = [
   {
     name: "write_node_document",
     mode: "edit",
-    description: "Write or replace a node document. Plain text is automatically converted to the standard AIstudy document template. Requires AISTUDY_MCP_ALLOW_EDIT=1.",
+    description: "Create a node document from clean plain text or Markdown headings. If the node already has content, this refuses to overwrite unless replaceExisting=true is explicitly passed. Do not use this for formatting-only changes. Requires AISTUDY_MCP_ALLOW_EDIT=1.",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    inputSchema: { type: "object", additionalProperties: true, required: ["courseId", "nodeId"], properties: { courseId: { type: "string", maxLength: 120 }, mindMapId: { type: "string", maxLength: 120 }, nodeId: { type: "string", maxLength: 120 }, title: { type: "string", maxLength: 255 }, text: { type: "string", maxLength: 20000 }, snapshot: { type: "object" } } }
+    inputSchema: { type: "object", additionalProperties: false, required: ["courseId", "nodeId"], properties: { courseId: { type: "string", maxLength: 120 }, mindMapId: { type: "string", maxLength: 120 }, nodeId: { type: "string", maxLength: 120 }, title: { type: "string", maxLength: 255 }, text: { type: "string", maxLength: 20000 }, replaceExisting: { type: "boolean", description: "Required as true to overwrite an existing non-empty document." }, snapshot: { type: "object", description: "Advanced: only pass a snapshot previously returned by read_node_document. Arbitrary handcrafted editor fragments are normalized." } } }
   },
   {
     name: "append_node_document",
     mode: "edit",
-    description: "Append text to a node document using the standard AIstudy document template. Requires AISTUDY_MCP_ALLOW_EDIT=1.",
+    description: "Append clean plain text or Markdown headings to a node document using the standard AIstudy document template. Requires AISTUDY_MCP_ALLOW_EDIT=1.",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: { type: "object", additionalProperties: false, required: ["courseId", "nodeId", "text"], properties: { courseId: { type: "string", maxLength: 120 }, mindMapId: { type: "string", maxLength: 120 }, nodeId: { type: "string", maxLength: 120 }, title: { type: "string", maxLength: 255 }, text: { type: "string", maxLength: 20000 } } }
   },
   {
+    name: "format_node_document",
+    mode: "edit",
+    description: "Style-only format an existing node document while preserving every editor element value exactly. It never rewrites text, trims whitespace, deletes blank elements, inserts blank lines, or indents paragraphs. Requires AISTUDY_MCP_ALLOW_EDIT=1.",
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    inputSchema: { type: "object", additionalProperties: false, required: ["courseId", "nodeId"], properties: { courseId: { type: "string", maxLength: 120 }, mindMapId: { type: "string", maxLength: 120 }, nodeId: { type: "string", maxLength: 120 }, title: { type: "string", maxLength: 255 } } }
+  },
+  {
     name: "update_node_document_style",
     mode: "edit",
-    description: "Apply full-document text style: fontSize, color, bold, italic, underline. Requires AISTUDY_MCP_ALLOW_EDIT=1.",
+    description: "Apply simple full-document text style only. This tool must not restructure text, add blank lines, split paragraphs, or replace content. Requires AISTUDY_MCP_ALLOW_EDIT=1.",
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: { type: "object", additionalProperties: false, required: ["courseId", "nodeId"], properties: { courseId: { type: "string", maxLength: 120 }, mindMapId: { type: "string", maxLength: 120 }, nodeId: { type: "string", maxLength: 120 }, fontSize: { type: "integer", minimum: 10, maximum: 72 }, color: { type: "string", maxLength: 32 }, bold: { type: "boolean" }, italic: { type: "boolean" }, underline: { type: "boolean" } } }
   },
@@ -301,7 +318,7 @@ function createMcpInstructions() {
     "Never guess courseId, mapId, or nodeId. Use read_courses and mcp_resolve_target before reading or editing a specific item.",
     "For read work: use read_courses, read_current_mindmap, search_nodes, list_node_documents, and read_node_document.",
     "For edit work: first resolve the exact target, then call mcp_plan_task with allowEdit=true, then use the specific edit tool. Edit tools require AISTUDY_MCP_ALLOW_EDIT=1.",
-    "For document writes: pass clean plain text or Markdown-style headings to write_node_document or append_node_document. AIstudy applies the standard document template automatically; do not hand-build scattered style fragments.",
+    "For document writes: pass clean plain text or Markdown-style headings to write_node_document or append_node_document. write_node_document refuses to overwrite an existing non-empty document unless replaceExisting=true is explicitly passed. Use format_node_document only for style cleanup that must preserve every existing editor value exactly. Use update_node_document_style only for simple whole-document style changes. Do not hand-build scattered editor fragments.",
     "For browser port work: call chrome_ports_status first, then chrome_port_open_page with a platformId and optional URL.",
     "When a user asks for a local handoff path, use resolve_course_locator instead of returning display breadcrumbs."
   ].join("\n");
@@ -352,6 +369,7 @@ function createMcpResourceText(uri) {
       "5. 端口任务先调用 `chrome_ports_status`，再 `chrome_port_open_page` 打开对应平台页面。",
       "6. 编辑任务先确认 `AISTUDY_MCP_ALLOW_EDIT=1`，再调用具体编辑工具。",
       "7. 写入文档时传干净文本或 Markdown 标题即可，AIstudy 会自动套用统一排版模板。",
+      "8. 只做不改内容的样式清理时调用 `format_node_document`；只改全文字号/颜色/粗斜体时调用 `update_node_document_style`；不要为了排版调用 `write_node_document` 重写整篇文档。",
       "",
       "不要把 UI 面包屑当成本地路径。需要给其他 Codex/Claude Code 定位时，调用 `resolve_course_locator`。"
     ].join("\n");
@@ -373,9 +391,13 @@ function createMcpResourceText(uri) {
       "`mcp_plan_task({ intent, allowEdit: true })` -> `mcp_resolve_target` -> 具体编辑工具。",
       "",
       "## 编辑文档",
-      "`mcp_resolve_target({ courseName, nodeQuery })` -> `read_node_document` -> `write_node_document` 或 `append_node_document`。",
+      "`mcp_resolve_target({ courseName, nodeQuery })` -> `read_node_document` -> 按目标选择工具：写新内容用 `write_node_document`，追加内容用 `append_node_document`，不改内容的样式清理用 `format_node_document`，只改全文样式用 `update_node_document_style`。",
       "",
-      "传入 `text` 时使用干净文本或 Markdown 标题；系统会自动生成统一排版：章节标题为橙色加粗，小节标题为紫色加粗，条款标题为蓝色加粗，正文为深色常规文本。",
+      "传入 `text` 时使用干净文本或 Markdown 标题；系统会自动生成统一排版：章节标题蓝色加粗，条款标题蓝色加粗，正文为深色常规文本。",
+      "",
+      "`format_node_document` 是安全样式工具：只允许改字体、颜色、粗体、下划线等样式字段，不允许删空行、插空行、缩进、拆段、合段或改写 `value`。",
+      "",
+      "禁止手写 canvas-editor 内部元素来实现排版。需要调整正文结构时，应读取全文后让用户确认，再用 `write_node_document` 重建整篇；不要把格式清理伪装成内容重写。",
       "",
       "## 交给其他智能体",
       "`resolve_course_locator` 生成本地定位文件，把 locatorPath 交给对方。",
@@ -418,7 +440,7 @@ function createMcpPrompt(name, args = {}) {
     aistudy_start: "你已经接入 AIstudy MCP。请先调用 mcp_get_started，再按返回的 nextSteps 做只读探测，不要进行编辑。",
     aistudy_read_knowledge: `请用 AIstudy MCP 读取知识库内容。目标：${target || "由用户当前问题决定"}。先 mcp_get_started，再 mcp_resolve_target，不要猜 courseId 或 nodeId。`,
     aistudy_edit_mindmap: `请用 AIstudy MCP 编辑思维导图。需求：${intent || "未提供"}。先 mcp_plan_task，再 mcp_resolve_target，确认 AISTUDY_MCP_ALLOW_EDIT=1 后只调用必要的编辑工具。`,
-    aistudy_edit_document: `请用 AIstudy MCP 编辑节点文档。需求：${intent || "未提供"}。先解析 courseId/nodeId，读出现有文档，再写入或追加。`
+    aistudy_edit_document: `请用 AIstudy MCP 编辑节点文档。需求：${intent || "未提供"}。先解析 courseId/nodeId，读出现有文档。写内容用 write_node_document/append_node_document；整理排版用 format_node_document；简单全文样式用 update_node_document_style。`
   };
   const text = textByName[name];
   if (!text) throw new Error("Unknown MCP prompt.");
@@ -468,7 +490,7 @@ function createMcpTaskPlan(args = {}) {
   if (editLike) {
     steps.push({
       order: order++,
-      tool: documentLike ? "write_node_document / append_node_document / update_node_document_style" : "create_mindmap_node / update_mindmap_node_text / move_mindmap_node / update_mindmap_node_style / update_mindmap_layout",
+      tool: documentLike ? "write_node_document / append_node_document / format_node_document / update_node_document_style" : "create_mindmap_node / update_mindmap_node_text / move_mindmap_node / update_mindmap_node_style / update_mindmap_layout",
       arguments: { courseId: courseId || "<resolvedCourseId>", nodeId: "<resolvedNodeId>" },
       purpose: "只调用和用户意图匹配的编辑工具。"
     });
@@ -504,7 +526,7 @@ function getMcpEventDir() {
 function getMcpDataChangeKind(tool) {
   if (["create_course", "rename_course", "move_course", "delete_course", "create_course_section", "rename_course_section", "move_course_section", "delete_course_section"].includes(tool)) return "course";
   if (["append_mindmap_node", "create_mindmap_node", "update_mindmap_node_text", "move_mindmap_node", "delete_mindmap_node", "update_mindmap_node_style", "update_mindmap_layout"].includes(tool)) return "mindmap";
-  if (["write_node_document", "append_node_document", "update_node_document_style"].includes(tool)) return "document";
+  if (["write_node_document", "append_node_document", "format_node_document", "update_node_document_style"].includes(tool)) return "document";
   if (tool === "chrome_port_open_page") return "chrome";
   return null;
 }
@@ -809,68 +831,21 @@ async function readServerVersion() {
 
 async function readMysqlConfig() {
   const dataConfig = await readJsonFile(getDataPath("config", "mysql.config.json"));
-  const database = getEnv("MYSQL_DATABASE") || dataConfig.database || "aistudy_public";
   const config = {
     host: getEnv("MYSQL_HOST") || dataConfig.host || "127.0.0.1",
     port: Number(getEnv("MYSQL_PORT") || dataConfig.port || 3306),
     user: getEnv("MYSQL_USER") || dataConfig.user || "root",
     password: getEnv("MYSQL_PASSWORD") ?? dataConfig.password ?? "",
-    database,
-    courseTable: getEnv("MYSQL_COURSE_TABLE") || dataConfig.courseTable || "course_management_courses",
-    courseSectionTable: getEnv("MYSQL_COURSE_SECTION_TABLE") || dataConfig.courseSectionTable || "knowledge_sections",
-    mindMapTable: getEnv("MYSQL_MIND_MAP_TABLE") || dataConfig.mindMapTable || "mind_maps",
-    mindMapSnapshotTable: getEnv("MYSQL_MIND_MAP_SNAPSHOT_TABLE") || dataConfig.mindMapSnapshotTable || "mind_map_snapshots",
-    mindMapNodeTable: getEnv("MYSQL_MIND_MAP_NODE_TABLE") || dataConfig.mindMapNodeTable || "mind_map_nodes",
-    knowledgeDocumentTable: getEnv("MYSQL_KNOWLEDGE_DOCUMENT_TABLE") || dataConfig.knowledgeDocumentTable || "knowledge_documents",
-    knowledgeDocumentSnapshotTable: getEnv("MYSQL_KNOWLEDGE_DOCUMENT_SNAPSHOT_TABLE") || dataConfig.knowledgeDocumentSnapshotTable || "knowledge_document_snapshots"
+    database: PUBLIC_MYSQL_DATABASE,
+    courseTable: PUBLIC_MYSQL_TABLES.courses,
+    courseSectionTable: PUBLIC_MYSQL_TABLES.sections,
+    mindMapTable: PUBLIC_MYSQL_TABLES.mindMaps,
+    mindMapSnapshotTable: PUBLIC_MYSQL_TABLES.mindMapSnapshots,
+    mindMapNodeTable: PUBLIC_MYSQL_TABLES.mindMapNodes,
+    knowledgeDocumentTable: PUBLIC_MYSQL_TABLES.documents,
+    knowledgeDocumentSnapshotTable: PUBLIC_MYSQL_TABLES.documentSnapshots
   };
-  config.database = await detectDatabase(config, database);
   return config;
-}
-
-async function databaseScore(connection, database, config) {
-  const [schemaRows] = await connection.execute(
-    "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ? LIMIT 1",
-    [database]
-  );
-  if (schemaRows.length === 0) return 0;
-  let score = 1;
-  for (const tableName of [config.courseTable, config.mindMapTable, config.mindMapNodeTable]) {
-    const [tableRows] = await connection.execute(
-      "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1",
-      [database, tableName]
-    );
-    if (tableRows.length === 0) continue;
-    score += 5;
-    const [countRows] = await connection.query(
-      `SELECT COUNT(*) AS rowCount FROM ${escapeIdentifier(database, "database")}.${escapeIdentifier(tableName, "table")}`
-    );
-    score += Math.min(Number(countRows[0]?.rowCount) || 0, 1000) * 10;
-  }
-  return score;
-}
-
-async function detectDatabase(config, defaultDatabase) {
-  if (getEnv("MYSQL_DATABASE") || config.database !== defaultDatabase) return defaultDatabase;
-  const connection = await mysql.createConnection({
-    host: config.host,
-    port: config.port,
-    user: config.user,
-    password: config.password
-  });
-  try {
-    const candidates = Array.from(new Set([defaultDatabase, "aistudy_public", "aistudy"]));
-    const scored = [];
-    for (const database of candidates) {
-      scored.push({ database, score: await databaseScore(connection, database, config) });
-    }
-    scored.sort((left, right) => right.score - left.score);
-    const best = scored[0];
-    const defaultScore = scored.find((item) => item.database === defaultDatabase)?.score ?? 0;
-    return best && best.score > Math.max(defaultScore, 1) ? best.database : defaultDatabase;
-  } finally {
-    await connection.end();
-  }
 }
 
 async function createPool() {
@@ -1077,6 +1052,18 @@ function normalizeMindMapSnapshot(value) {
     layout: typeof value.layout === "string" ? value.layout : DEFAULT_LAYOUT,
     updatedAt: new Date().toISOString()
   };
+}
+
+function assertMindMapSaveTarget(course, document, snapshot) {
+  const expectedTitles = new Set(
+    [course?.name, document?.title]
+      .filter((value) => typeof value === "string" && value.trim())
+      .map((value) => value.trim())
+  );
+  const rootTitle = getNodeTitle(snapshot.root, "").trim();
+  if (expectedTitles.size > 0 && rootTitle && !expectedTitles.has(rootTitle)) {
+    throw new Error("Mind map save target mismatch. Refusing to overwrite another knowledge base.");
+  }
 }
 
 function createSnapshotPayloadJson(snapshot, updatedAt) {
@@ -1490,6 +1477,7 @@ async function appendMindMapNode(runtime, args) {
   try {
     await connection.beginTransaction();
     const nodes = flattenNodes(snapshot.root);
+    assertMindMapSaveTarget(course, document, snapshot);
     const payloadJson = createSnapshotPayloadJson(snapshot, updatedAt);
     const snapshotId = createEntityId("mmsnap");
     const sequenceNo = await nextSnapshotSequence(connection, runtime, document.mapId);
@@ -1553,6 +1541,7 @@ async function saveMindMapSnapshot(runtime, course, document, snapshot) {
   try {
     await connection.beginTransaction();
     const nodes = flattenNodes(snapshot.root);
+    assertMindMapSaveTarget(course, document, snapshot);
     const payloadJson = createSnapshotPayloadJson(snapshot, updatedAt);
     const snapshotId = createEntityId("mmsnap");
     const sequenceNo = await nextSnapshotSequence(connection, runtime, document.mapId);
@@ -1689,11 +1678,84 @@ async function updateMindMapLayout(runtime, args) {
 }
 
 const DOCUMENT_TEMPLATE_STYLE = {
-  section: { size: 26, color: "#ea580c", bold: true },
-  subsection: { size: 26, color: "#7c3aed", bold: true },
-  article: { size: 24, color: "#2563eb", bold: true },
-  body: { size: 24, color: "#111827", bold: false }
+  section: { size: 22, color: "#2563eb", bold: true },
+  subsection: { size: 20, color: "#1f2937", bold: true },
+  article: { size: 20, color: "#2563eb", bold: true },
+  body: { size: 20, color: "#1f2937", bold: false }
 };
+
+const DOCUMENT_TEMPLATE_STYLE_KEYS = new Set([
+  "value",
+  "type",
+  "font",
+  "size",
+  "bold",
+  "italic",
+  "underline",
+  "strikeout",
+  "color",
+  "highlight",
+  "rowFlex",
+  "listType",
+  "listStyle",
+  "listId",
+  "level",
+  "href",
+  "url",
+  "colgroup",
+  "trList",
+  "width",
+  "height"
+]);
+
+const DOCUMENT_TEXT_CONTAINER_KEYS = new Set([
+  "content",
+  "main",
+  "header",
+  "footer",
+  "children",
+  "items",
+  "paragraphs",
+  "rows",
+  "cells",
+  "trList",
+  "tdList",
+  "valueList"
+]);
+
+const DOCUMENT_TEXT_SKIP_KEYS = new Set([
+  "schemaVersion",
+  "editor",
+  "editorVersion",
+  "updatedAt",
+  "type",
+  "font",
+  "size",
+  "bold",
+  "italic",
+  "underline",
+  "strikeout",
+  "color",
+  "highlight",
+  "rowFlex",
+  "listType",
+  "listStyle",
+  "listId",
+  "level",
+  "href",
+  "url",
+  "colgroup",
+  "width",
+  "height",
+  "style",
+  "styles",
+  "attrs",
+  "mode",
+  "name",
+  "id",
+  "uuid",
+  "graffiti"
+]);
 
 function stripMarkdownHeading(line) {
   return String(line || "").replace(/^#{1,6}\s+/, "").replace(/\*\*/g, "").trim();
@@ -1705,22 +1767,55 @@ function classifyDocumentTemplateLine(line) {
   if (/^#{1,2}\s+/.test(line) || /^[一二三四五六七八九十]+[、.．]/.test(plain)) return "section";
   if (/^#{3,6}\s+/.test(line) || /^[（(][一二三四五六七八九十\d]+[）)]、?/.test(plain)) return "subsection";
   if (/^第[一二三四五六七八九十百千万\d]+条/.test(plain)) return "article";
-  if (plain.length <= 28 && /[:：]$/.test(plain)) return "subsection";
   return "body";
+}
+
+function splitDocumentTemplateHeadingLine(line) {
+  const raw = stripMarkdownHeading(line);
+  const patterns = [
+    { kind: "section", regex: /^([一二三四五六七八九十]+[、.．][^：:\n]{1,80}[：:])\s*(.+)$/ },
+    { kind: "subsection", regex: /^([（(][一二三四五六七八九十\d]+[）)]、?[^：:\n]{1,80}[：:])\s*(.+)$/ },
+    { kind: "article", regex: /^(第[一二三四五六七八九十百千万\d]+条[^：:\n]{0,80}[：:]?)\s*(.+)$/ }
+  ];
+  for (const { kind, regex } of patterns) {
+    const match = raw.match(regex);
+    if (match && match[1] && match[2]) {
+      return { kind, heading: match[1].trim(), rest: match[2].trim() };
+    }
+  }
+  return null;
 }
 
 function createTemplateElement(value, kind) {
   return { value, ...DOCUMENT_TEMPLATE_STYLE[kind] };
 }
 
+function normalizeDocumentTemplateValue(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function normalizeDocumentTemplateSource(text) {
+  return String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/([。！？；;])([一二三四五六七八九十]+[、.．][^：:\n]{1,80}[：:])/g, "$1\n$2")
+    .replace(/([。！？；;])([（(][一二三四五六七八九十\d]+[）)]、?[^：:\n]{1,80}[：:])/g, "$1\n$2")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
 function buildDocumentTemplateElements(text) {
-  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const lines = normalizeDocumentTemplateSource(text).split("\n");
   const elements = [];
   let bodyLines = [];
   const flushBody = () => {
-    const body = bodyLines.join("\n").trim();
+    const body = normalizeDocumentTemplateValue(bodyLines.join("\n"));
     bodyLines = [];
-    if (body) elements.push(createTemplateElement(`${body}\n\n`, "body"));
+    if (body) elements.push(createTemplateElement(`${body}\n`, "body"));
   };
   for (const rawLine of lines) {
     const line = String(rawLine || "").trim();
@@ -1728,16 +1823,99 @@ function buildDocumentTemplateElements(text) {
       flushBody();
       continue;
     }
+    const splitHeading = splitDocumentTemplateHeadingLine(rawLine);
+    if (splitHeading) {
+      flushBody();
+      elements.push(createTemplateElement(`${splitHeading.heading}\n`, splitHeading.kind));
+      bodyLines.push(splitHeading.rest);
+      continue;
+    }
     const kind = classifyDocumentTemplateLine(rawLine);
     if (kind && kind !== "body") {
       flushBody();
-      elements.push(createTemplateElement(`${stripMarkdownHeading(rawLine)}\n\n`, kind));
+      elements.push(createTemplateElement(`${stripMarkdownHeading(rawLine)}\n`, kind));
       continue;
     }
     bodyLines.push(line);
   }
   flushBody();
   return elements.length > 0 ? elements : [createTemplateElement("", "body")];
+}
+
+function sanitizeDocumentElementValue(value) {
+  return String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\u3000{2,}/g, "\u3000")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+function getDocumentElementSignature(element) {
+  return JSON.stringify(
+    Object.entries(element)
+      .filter(([key]) => key !== "value")
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
+}
+
+function shouldMergeDocumentElements(previous, next) {
+  if (!previous || !next) return false;
+  if (previous.bold || next.bold) return false;
+  if (previous.listType || next.listType) return false;
+  return getDocumentElementSignature(previous) === getDocumentElementSignature(next);
+}
+
+function sanitizeDocumentElement(element) {
+  if (!element || typeof element !== "object") return null;
+  const next = {};
+  for (const [key, value] of Object.entries(element)) {
+    if (DOCUMENT_TEMPLATE_STYLE_KEYS.has(key)) next[key] = value;
+  }
+  next.value = sanitizeDocumentElementValue(next.value);
+  if (next.rowFlex === "justify") next.rowFlex = "alignment";
+  if (typeof next.size === "number") next.size = Math.max(10, Math.min(72, Math.round(next.size)));
+  if (typeof next.color === "string" && !/^#[0-9a-f]{6}$/i.test(next.color) && !/^rgb\(/i.test(next.color)) delete next.color;
+  return next;
+}
+
+function sanitizeDocumentElementList(value) {
+  if (!Array.isArray(value)) return [{ value: "", ...DOCUMENT_TEMPLATE_STYLE.body }];
+  const result = [];
+  let previousWasBlank = false;
+  for (const item of value) {
+    const next = sanitizeDocumentElement(item);
+    if (!next) continue;
+    const isBlank = !String(next.value || "").trim();
+    if (isBlank) {
+      if (previousWasBlank) continue;
+      if (result.length === 0) continue;
+      next.value = "\n";
+      previousWasBlank = true;
+    } else {
+      next.value = next.value.replace(/^\n+/, "").replace(/\n{2,}$/, "\n");
+      previousWasBlank = false;
+    }
+    if (!next.value) continue;
+    const previous = result[result.length - 1];
+    if (!isBlank && shouldMergeDocumentElements(previous, next)) {
+      previous.value = sanitizeDocumentElementValue(`${previous.value}${next.value}`);
+      continue;
+    }
+    result.push(next);
+  }
+  return result.length > 0 ? result : [{ value: "", ...DOCUMENT_TEMPLATE_STYLE.body }];
+}
+
+function normalizeDocumentContent(content) {
+  const source = content && typeof content === "object" ? content : {};
+  return {
+    ...source,
+    main: sanitizeDocumentElementList(source.main),
+    header: Array.isArray(source.header) ? sanitizeDocumentElementList(source.header) : undefined,
+    footer: Array.isArray(source.footer) ? sanitizeDocumentElementList(source.footer) : undefined,
+    graffiti: Array.isArray(source.graffiti) ? source.graffiti : undefined
+  };
 }
 
 function createTextDocumentSnapshot(text) {
@@ -1756,7 +1934,7 @@ function normalizeDocumentSnapshot(value) {
     schemaVersion: SCHEMA_VERSION,
     editor: DOCUMENT_EDITOR,
     editorVersion: typeof value.editorVersion === "string" ? value.editorVersion : DOCUMENT_EDITOR_VERSION,
-    content: value.content && typeof value.content === "object" ? value.content : { main: [{ value: "" }] },
+    content: normalizeDocumentContent(value.content),
     updatedAt: new Date().toISOString()
   };
 }
@@ -1765,7 +1943,128 @@ function extractDocumentText(value) {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(extractDocumentText).join("");
   if (!value || typeof value !== "object") return "";
-  return (typeof value.value === "string" ? value.value : "") + Object.entries(value).filter(([key]) => key !== "value").map(([, child]) => extractDocumentText(child)).join("");
+  let text = typeof value.value === "string" ? value.value : "";
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "value" || DOCUMENT_TEXT_SKIP_KEYS.has(key)) continue;
+    if (DOCUMENT_TEXT_CONTAINER_KEYS.has(key) || Array.isArray(child)) {
+      text += extractDocumentText(child);
+      continue;
+    }
+    if (child && typeof child === "object" && ("value" in child || "content" in child || "main" in child)) {
+      text += extractDocumentText(child);
+    }
+  }
+  return text;
+}
+
+const DOCUMENT_FORMAT_TEXT_COLOR = "#1f2937";
+const DOCUMENT_FORMAT_PRIMARY_COLOR = "#2563eb";
+
+function documentElementText(value) {
+  return (Array.isArray(value) ? value : []).map((item) => String(item?.value ?? "")).join("");
+}
+
+function cleanDocumentElementText(value) {
+  return String(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function getDocumentElementCoreText(value) {
+  return cleanDocumentElementText(value).trim();
+}
+
+function isDocumentMainHeadingText(value) {
+  return /^[一二三四五六七八九十]+[、.．]/.test(getDocumentElementCoreText(value));
+}
+
+function isDocumentNumberHeadingText(value) {
+  return /^\d+[.．]\s*\S/.test(getDocumentElementCoreText(value));
+}
+
+function isDocumentLabelText(value) {
+  const text = getDocumentElementCoreText(value);
+  return text.length > 0 && text.length <= 40 && /[:：]$/.test(text) && !isDocumentMainHeadingText(text);
+}
+
+function isDocumentUrlText(value) {
+  return /^https?:\/\//i.test(getDocumentElementCoreText(value));
+}
+
+function isDocumentBodyElement(element) {
+  const text = getDocumentElementCoreText(element?.value);
+  return Boolean(text) && !isDocumentMainHeadingText(text) && !isDocumentNumberHeadingText(text) && !isDocumentLabelText(text) && !isDocumentUrlText(text);
+}
+
+function stylePreservedDocumentElement(element) {
+  const next = { ...(element || {}) };
+  delete next.rowFlex;
+  const value = typeof next.value === "string" ? next.value : "";
+  const text = getDocumentElementCoreText(value);
+  if (!text) {
+    if (typeof next.value === "string") {
+      next.size = Number.isFinite(Number(next.size)) ? Number(next.size) : 20;
+      next.bold = false;
+      next.color = DOCUMENT_FORMAT_TEXT_COLOR;
+      delete next.underline;
+    }
+    return next;
+  }
+  if (isDocumentMainHeadingText(value)) {
+    next.size = 28;
+    next.bold = true;
+    next.color = DOCUMENT_FORMAT_PRIMARY_COLOR;
+    next.underline = true;
+    return next;
+  }
+  if (isDocumentNumberHeadingText(value)) {
+    next.size = 22;
+    next.bold = true;
+    next.color = DOCUMENT_FORMAT_TEXT_COLOR;
+    delete next.underline;
+    return next;
+  }
+  if (isDocumentLabelText(value)) {
+    next.size = 20;
+    next.bold = true;
+    next.color = DOCUMENT_FORMAT_TEXT_COLOR;
+    delete next.underline;
+    return next;
+  }
+  if (isDocumentUrlText(value)) {
+    next.size = 20;
+    next.bold = false;
+    next.color = DOCUMENT_FORMAT_PRIMARY_COLOR;
+    next.underline = true;
+    return next;
+  }
+  next.size = 20;
+  next.bold = false;
+  next.color = DOCUMENT_FORMAT_TEXT_COLOR;
+  delete next.underline;
+  return next;
+}
+
+function formatDocumentElementsPreservingText(source) {
+  return (Array.isArray(source) ? source : []).map(stylePreservedDocumentElement);
+}
+
+function formatDocumentSnapshotPreservingText(snapshot) {
+  const source = snapshot && typeof snapshot === "object" ? snapshot : {};
+  const content = source.content && typeof source.content === "object" ? source.content : {};
+  const originalMain = Array.isArray(content.main) ? content.main : [];
+  const formattedMain = formatDocumentElementsPreservingText(originalMain);
+  const before = documentElementText(originalMain);
+  const after = documentElementText(formattedMain);
+  if (formattedMain.length !== originalMain.length || before !== after) {
+    throw new Error("Document formatting aborted: editor values would change.");
+  }
+  return {
+    ...source,
+    schemaVersion: SCHEMA_VERSION,
+    editor: DOCUMENT_EDITOR,
+    editorVersion: typeof source.editorVersion === "string" ? source.editorVersion : DOCUMENT_EDITOR_VERSION,
+    content: { ...content, main: formattedMain },
+    updatedAt: new Date().toISOString()
+  };
 }
 
 async function resolveDocumentTarget(runtime, args) {
@@ -1825,6 +2124,7 @@ async function nextDocumentSequence(connection, runtime, documentId) {
 }
 
 async function writeNodeDocumentSnapshot(runtime, target, title, snapshot) {
+  const normalizedSnapshot = normalizeDocumentSnapshot(snapshot);
   const connection = await runtime.pool.getConnection();
   const now = new Date();
   const updatedAt = now.toISOString();
@@ -1838,7 +2138,7 @@ async function writeNodeDocumentSnapshot(runtime, target, title, snapshot) {
     if (!nodeRows[0]) throw new Error("Mind map node is missing.");
     const existing = await findDocument(runtime, target);
     const documentId = existing?.id || createEntityId("kdoc");
-    const payloadJson = createSnapshotPayloadJson(snapshot, updatedAt);
+    const payloadJson = createSnapshotPayloadJson(normalizedSnapshot, updatedAt);
     const snapshotId = createEntityId("kdocsnap");
     await connection.execute(
       `INSERT INTO ${escapeIdentifier(runtime.config.knowledgeDocumentTable, "document table")}
@@ -1846,7 +2146,44 @@ async function writeNodeDocumentSnapshot(runtime, target, title, snapshot) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
        ON DUPLICATE KEY UPDATE title = VALUES(title), current_snapshot_id = VALUES(current_snapshot_id),
         current_byte_size = VALUES(current_byte_size), has_content = VALUES(has_content), updated_at = VALUES(updated_at), deleted_at = NULL`,
-      [documentId, target.course.id, target.mindMapId, target.nodeId, title, snapshotId, Buffer.byteLength(payloadJson, "utf8"), extractDocumentText(snapshot.content).trim() ? 1 : 0, now, now]
+      [documentId, target.course.id, target.mindMapId, target.nodeId, title, snapshotId, Buffer.byteLength(payloadJson, "utf8"), extractDocumentText(normalizedSnapshot.content).trim() ? 1 : 0, now, now]
+    );
+    const sequenceNo = await nextDocumentSequence(connection, runtime, documentId);
+    await connection.execute(
+      `INSERT INTO ${escapeIdentifier(runtime.config.knowledgeDocumentSnapshotTable, "document snapshot table")}
+        (id, document_id, sequence_no, schema_version, editor, editor_version, payload_json, payload_hash, byte_size, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [snapshotId, documentId, sequenceNo, SCHEMA_VERSION, DOCUMENT_EDITOR, normalizedSnapshot.editorVersion, payloadJson, hashSnapshot(normalizedSnapshot), Buffer.byteLength(payloadJson, "utf8"), now]
+    );
+    await connection.commit();
+    return readNodeDocument(runtime, { courseId: target.course.id, mindMapId: target.mindMapId, nodeId: target.nodeId });
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function writeNodeDocumentSnapshotPreserved(runtime, target, documentId, title, snapshot) {
+  const connection = await runtime.pool.getConnection();
+  const now = new Date();
+  const updatedAt = now.toISOString();
+  try {
+    await connection.beginTransaction();
+    const [nodeRows] = await connection.execute(
+      `SELECT node_id FROM ${escapeIdentifier(runtime.config.mindMapNodeTable, "node table")}
+       WHERE course_id = ? AND mind_map_id = ? AND node_id = ? AND deleted_at IS NULL LIMIT 1`,
+      [target.course.id, target.mindMapId, target.nodeId]
+    );
+    if (!nodeRows[0]) throw new Error("Mind map node is missing.");
+    const payloadJson = createSnapshotPayloadJson(snapshot, updatedAt);
+    const snapshotId = createEntityId("kdocsnap");
+    await connection.execute(
+      `UPDATE ${escapeIdentifier(runtime.config.knowledgeDocumentTable, "document table")}
+       SET title = ?, current_snapshot_id = ?, current_byte_size = ?, has_content = ?, updated_at = ?, deleted_at = NULL
+       WHERE id = ? AND course_id = ? AND mind_map_id = ? AND node_id = ? LIMIT 1`,
+      [title, snapshotId, Buffer.byteLength(payloadJson, "utf8"), extractDocumentText(snapshot.content).trim() ? 1 : 0, now, documentId, target.course.id, target.mindMapId, target.nodeId]
     );
     const sequenceNo = await nextDocumentSequence(connection, runtime, documentId);
     await connection.execute(
@@ -1884,6 +2221,10 @@ async function listNodeDocuments(runtime, args) {
 async function writeNodeDocument(runtime, args) {
   assertEditEnabled();
   const target = await resolveDocumentTarget(runtime, args);
+  const existing = await findDocument(runtime, target);
+  if (existing?.hasContent && args.replaceExisting !== true) {
+    throw new Error("Node document already has content. Use append_node_document for additions, format_node_document for style-only cleanup, or pass replaceExisting=true only when the user explicitly wants to overwrite the whole document.");
+  }
   const snapshot = args.snapshot ? normalizeDocumentSnapshot(args.snapshot) : createTextDocumentSnapshot(args.text || "");
   return writeNodeDocumentSnapshot(runtime, target, normalizeText(args.title, "节点文档") || "节点文档", snapshot);
 }
@@ -1902,6 +2243,23 @@ async function appendNodeDocument(runtime, args) {
   }
   snapshot.content.main.push(...buildDocumentTemplateElements(args.text || ""));
   return writeNodeDocumentSnapshot(runtime, target, normalizeText(args.title, existing.document?.title || "节点文档"), snapshot);
+}
+
+async function formatNodeDocument(runtime, args) {
+  assertEditEnabled();
+  const target = await resolveDocumentTarget(runtime, args);
+  const doc = await findDocument(runtime, target);
+  if (!doc?.currentSnapshotId) throw new Error("Node document is missing.");
+  const [rows] = await runtime.pool.execute(
+    `SELECT payload_json AS payloadJson
+     FROM ${escapeIdentifier(runtime.config.knowledgeDocumentSnapshotTable, "document snapshot table")}
+     WHERE id = ? AND document_id = ? LIMIT 1`,
+    [doc.currentSnapshotId, doc.id]
+  );
+  if (!rows[0]?.payloadJson) throw new Error("Node document snapshot is missing.");
+  const rawSnapshot = JSON.parse(rows[0].payloadJson);
+  const snapshot = formatDocumentSnapshotPreservingText(rawSnapshot);
+  return writeNodeDocumentSnapshotPreserved(runtime, target, doc.id, normalizeText(args.title, doc.title), snapshot);
 }
 
 function applyDocumentStyle(value, style) {
@@ -2141,6 +2499,7 @@ async function runTool(getRuntime, name, args = {}) {
   if (name === "read_node_document") return readNodeDocument(runtime, args);
   if (name === "write_node_document") return writeNodeDocument(runtime, args);
   if (name === "append_node_document") return appendNodeDocument(runtime, args);
+  if (name === "format_node_document") return formatNodeDocument(runtime, args);
   if (name === "update_node_document_style") return updateNodeDocumentStyle(runtime, args);
   if (name === "resolve_course_locator") return resolveCourseLocator(runtime, args);
   throw new Error("Unknown tool.");

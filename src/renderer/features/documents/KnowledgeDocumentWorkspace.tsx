@@ -543,6 +543,7 @@ export function KnowledgeDocumentWorkspace({
   const saveTimerRef = React.useRef<number | null>(null);
   const pendingSaveRef = React.useRef<PendingDocumentSave | null>(null);
   const activeSaveRef = React.useRef<Promise<KnowledgeDocumentRecord | null>>(Promise.resolve(null));
+  const documentDirtyRef = React.useRef(false);
   const latestSnapshotRef = React.useRef<KnowledgeDocumentSnapshot | null>(null);
   const loadSequenceRef = React.useRef(0);
   const documentStatusMapRef = React.useRef<Map<string, KnowledgeDocumentStatus>>(new Map());
@@ -803,6 +804,7 @@ export function KnowledgeDocumentWorkspace({
               setSavedAt(formatSavedAt());
               setError("");
             }
+            documentDirtyRef.current = false;
             return null;
           } catch (localError) {
             if (!silent) {
@@ -820,6 +822,7 @@ export function KnowledgeDocumentWorkspace({
           setSavedAt(formatSavedAt());
           setError("");
         }
+        documentDirtyRef.current = false;
         return document;
       } catch (error) {
         try {
@@ -830,6 +833,7 @@ export function KnowledgeDocumentWorkspace({
             setSavedAt(formatSavedAt());
             setError(getErrorMessage(error, "文档保存失败，已保存到本地副本"));
           }
+          documentDirtyRef.current = false;
           return null;
         } catch (localError) {
           if (!silent) {
@@ -870,6 +874,7 @@ export function KnowledgeDocumentWorkspace({
     (nextSnapshot: KnowledgeDocumentSnapshot) => {
       if (!documentBinding) return;
       latestSnapshotRef.current = nextSnapshot;
+      documentDirtyRef.current = true;
       pendingSaveRef.current = {
         ...documentBinding,
         title: selectedNode.title || "未命名",
@@ -892,6 +897,7 @@ export function KnowledgeDocumentWorkspace({
       setIsEditorReady(false);
       setSnapshot(nextSnapshot);
       latestSnapshotRef.current = nextSnapshot;
+      documentDirtyRef.current = true;
       await persistDocument({
         ...documentBinding,
         title: selectedNode.title || "未命名",
@@ -912,6 +918,7 @@ export function KnowledgeDocumentWorkspace({
     commitDocumentViewportState(EMPTY_VIEWPORT_SCROLL_STATE);
     resetDocumentViewportToStart();
     latestSnapshotRef.current = null;
+    documentDirtyRef.current = false;
     setSavedAt(null);
     setError("");
 
@@ -958,11 +965,13 @@ export function KnowledgeDocumentWorkspace({
         }
         setSnapshot(nextSnapshot);
         latestSnapshotRef.current = nextSnapshot;
+        documentDirtyRef.current = false;
         setStorageMode(document ? "mysql" : "none");
       } catch (error) {
         if (loadSequenceRef.current !== sequence) return;
         setSnapshot(fallbackSnapshot);
         latestSnapshotRef.current = fallbackSnapshot;
+        documentDirtyRef.current = false;
         setStorageMode("local");
         setError(getErrorMessage(error, "文档读取失败，已打开本地副本"));
       } finally {
@@ -1153,6 +1162,7 @@ export function KnowledgeDocumentWorkspace({
 
   const saveNow = React.useCallback(() => {
     if (!documentBinding) return Promise.resolve(null);
+    if (!documentDirtyRef.current && !pendingSaveRef.current) return Promise.resolve(null);
     const nextSnapshot = editorRef.current?.getSnapshot() ?? latestSnapshotRef.current ?? snapshot;
     if (!nextSnapshot) return Promise.resolve(null);
     latestSnapshotRef.current = nextSnapshot;

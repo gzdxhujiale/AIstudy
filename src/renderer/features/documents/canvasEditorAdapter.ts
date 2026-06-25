@@ -130,6 +130,35 @@ function normalizeEditorData(content: KnowledgeDocumentContent | null | undefine
   };
 }
 
+function normalizeLiveElement(element: IElement): IElement {
+  const next = { ...element, value: toElementText(element.value) } as IElement;
+  if (next.rowFlex === "justify") {
+    next.rowFlex = "alignment" as IElement["rowFlex"];
+  }
+  return next;
+}
+
+function normalizeLiveElementList(value: unknown): IElement[] {
+  if (!Array.isArray(value)) return [{ value: "" } as IElement];
+  const list = value.filter((item): item is IElement => Boolean(item && typeof item === "object")).map(normalizeLiveElement);
+  return list.length > 0 ? list : [{ value: "" } as IElement];
+}
+
+function normalizeLiveOptionalElementList(value: unknown): IElement[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = value.filter((item): item is IElement => Boolean(item && typeof item === "object")).map(normalizeLiveElement);
+  return list.length > 0 ? list : undefined;
+}
+
+function normalizeLiveEditorData(content: KnowledgeDocumentContent | null | undefined): IEditorData {
+  return {
+    header: normalizeLiveOptionalElementList(content?.header),
+    main: normalizeLiveElementList(content?.main),
+    footer: normalizeLiveOptionalElementList(content?.footer),
+    graffiti: Array.isArray(content?.graffiti) ? (content?.graffiti as IEditorData["graffiti"]) : undefined
+  };
+}
+
 function hasExplicitInlineStyle(element: IElement) {
   return INLINE_STYLE_KEYS.some((key) => element[key] !== undefined && element[key] !== null);
 }
@@ -165,6 +194,10 @@ function createSmartListId() {
 
 function getVisibleElementText(element: IElement) {
   return toElementText(element.value).replace(new RegExp(ZERO_WIDTH_BREAK, "g"), "").trim();
+}
+
+function isBlankTextElement(element: IElement) {
+  return isTextElement(element) && getVisibleElementText(element).length === 0;
 }
 
 function findParagraphBounds(elementList: IElement[], index: number) {
@@ -401,8 +434,10 @@ export async function createCanvasDocumentEditor(
   let lastSelectedText = "";
   let isNormalizingInputStyle = false;
   let isPointerSelecting = false;
+  let hasUserEdited = false;
   let lastRange: CanvasRange | null = null;
   let pendingSnapshotTimer: number | null = null;
+  let pendingSnapshotIdle: number | null = null;
   let pendingFormatFrame: number | null = null;
   let pendingFormatState: KnowledgeDocumentFormatState | null = null;
   let lastFormatState: KnowledgeDocumentFormatState = {
@@ -452,25 +487,40 @@ export async function createCanvasDocumentEditor(
       return false;
     }
   };
-  const emitSnapshotNow = () => {
+  const clearPendingSnapshotTask = () => {
     if (pendingSnapshotTimer !== null) {
       window.clearTimeout(pendingSnapshotTimer);
       pendingSnapshotTimer = null;
     }
+    if (pendingSnapshotIdle !== null) {
+      window.cancelIdleCallback?.(pendingSnapshotIdle);
+      pendingSnapshotIdle = null;
+    }
+  };
+  const emitSnapshotNow = () => {
+    clearPendingSnapshotTask();
     const nextSnapshot = toSnapshot(editor);
     events.onSnapshotChanged?.(nextSnapshot);
     return nextSnapshot;
   };
   const scheduleSnapshot = () => {
-    if (pendingSnapshotTimer !== null) {
-      window.clearTimeout(pendingSnapshotTimer);
-    }
+    clearPendingSnapshotTask();
     pendingSnapshotTimer = window.setTimeout(() => {
       pendingSnapshotTimer = null;
-      events.onSnapshotChanged?.(toSnapshot(editor));
-    }, 320);
+      const flush = () => {
+        pendingSnapshotTimer = null;
+        pendingSnapshotIdle = null;
+        events.onSnapshotChanged?.(toSnapshot(editor));
+      };
+      if (window.requestIdleCallback) {
+        pendingSnapshotIdle = window.requestIdleCallback(flush, { timeout: 1500 });
+        return;
+      }
+      pendingSnapshotTimer = window.setTimeout(flush, 0);
+    }, 650);
   };
   const runFormatCommand = (action: () => void) => {
+    hasUserEdited = true;
     restoreRememberedRange();
     action();
     rememberRange();
@@ -496,6 +546,27 @@ export async function createCanvasDocumentEditor(
 
       if (!activeListId) {
         activeListId = typeof element.listId === "string" && element.listId ? element.listId : createSmartListId();
+      }
+
+      if (isBlankTextElement(element)) {
+        const nextElement = {
+          ...element,
+          value: rawValue || ZERO_WIDTH_BREAK
+        } as IElement;
+        delete nextElement.listType;
+        delete nextElement.listStyle;
+        delete nextElement.listId;
+
+        if (
+          nextElement.value !== element.value ||
+          nextElement.listType !== element.listType ||
+          nextElement.listStyle !== element.listStyle ||
+          nextElement.listId !== element.listId
+        ) {
+          changed = true;
+        }
+
+        return nextElement;
       }
 
       const nextValue = rawValue.replace(MANUAL_ORDERED_PREFIX_PATTERN, "");
@@ -550,6 +621,21 @@ export async function createCanvasDocumentEditor(
     runFormatCommand(() => editor.command.executeList(null));
     return true;
   };
+  const cancelBlankListKeyboardAction = (event: KeyboardEvent | InputEvent) => {
+    if (event.defaultPrevented || event.isComposing) return;
+    const isKeyboardCancel =
+      event instanceof KeyboardEvent &&
+      (event.key === "Enter" || event.key === "Backspace" || event.key === "Delete");
+    const isBeforeInputCancel =
+      event instanceof InputEvent &&
+      (event.inputType === "insertParagraph" || event.inputType === "deleteContentBackward" || event.inputType === "deleteContentForward");
+
+    if (!isKeyboardCancel && !isBeforeInputCancel) return;
+    if (!cancelBlankListOnEnter()) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+  };
   const readCurrentSelectionElementList = () => {
     try {
       return editor.command.getRangeContext()?.selectionElementList ?? [];
@@ -588,11 +674,29 @@ export async function createCanvasDocumentEditor(
     if (event.button !== 0) return;
     isPointerSelecting = true;
   };
+  const markUserEdited = () => {
+    hasUserEdited = true;
+  };
+  const handleBeforeInput = (event: InputEvent) => {
+    markUserEdited();
+    cancelBlankListKeyboardAction(event);
+  };
+  const handleKeyDown = (event: KeyboardEvent) => {
+    markUserEdited();
+    cancelBlankListKeyboardAction(event);
+  };
   container.addEventListener("pointerdown", handlePointerDown, true);
+  container.addEventListener("beforeinput", handleBeforeInput, true);
+  container.addEventListener("keydown", handleKeyDown, true);
+  container.addEventListener("paste", markUserEdited, true);
+  container.addEventListener("cut", markUserEdited, true);
+  container.addEventListener("drop", markUserEdited, true);
+  container.addEventListener("compositionstart", markUserEdited, true);
   window.addEventListener("pointerup", finishPointerSelection);
   window.addEventListener("pointercancel", finishPointerSelection);
 
   editor.listener.contentChange = () => {
+    if (!hasUserEdited && !isNormalizingInputStyle) return;
     if (isNormalizingInputStyle) {
       scheduleSnapshot();
       return;
@@ -600,7 +704,7 @@ export async function createCanvasDocumentEditor(
 
     const range = editor.command.getRange();
     const currentValue = editor.command.getValue();
-    let nextContent = normalizeEditorData(currentValue.data);
+    let nextContent = normalizeLiveEditorData(currentValue.data);
     const normalizedInputStyle = inheritDocumentInputStyle(nextContent, range);
     nextContent = normalizedInputStyle.content;
     const normalizedLists = normalizeOrderedLists(nextContent);
@@ -635,10 +739,7 @@ export async function createCanvasDocumentEditor(
 
   return {
     getSnapshot: () => {
-      if (pendingSnapshotTimer !== null) {
-        window.clearTimeout(pendingSnapshotTimer);
-        pendingSnapshotTimer = null;
-      }
+      clearPendingSnapshotTask();
       return toSnapshot(editor);
     },
     getSelectedText: () => rememberSelectedText() || lastSelectedText,
@@ -647,6 +748,7 @@ export async function createCanvasDocumentEditor(
       return Boolean(readEditorRangeText(editor) || readCurrentSelectionElementList().length > 0);
     },
     exec: (command) => {
+      if (command !== "save") markUserEdited();
       if (command === "undo") editor.command.executeUndo();
       if (command === "redo") editor.command.executeRedo();
       if (command === "bold") runFormatCommand(() => editor.command.executeBold());
@@ -721,9 +823,8 @@ export async function createCanvasDocumentEditor(
       editor.command.executeFocus();
     },
     destroy: () => {
-      if (pendingSnapshotTimer !== null) {
-        window.clearTimeout(pendingSnapshotTimer);
-        pendingSnapshotTimer = null;
+      if (hasUserEdited && (pendingSnapshotTimer !== null || pendingSnapshotIdle !== null)) {
+        clearPendingSnapshotTask();
         events.onSnapshotChanged?.(toSnapshot(editor));
       }
       if (pendingFormatFrame !== null) {
@@ -731,6 +832,12 @@ export async function createCanvasDocumentEditor(
         pendingFormatFrame = null;
       }
       container.removeEventListener("pointerdown", handlePointerDown, true);
+      container.removeEventListener("beforeinput", handleBeforeInput, true);
+      container.removeEventListener("keydown", handleKeyDown, true);
+      container.removeEventListener("paste", markUserEdited, true);
+      container.removeEventListener("cut", markUserEdited, true);
+      container.removeEventListener("drop", markUserEdited, true);
+      container.removeEventListener("compositionstart", markUserEdited, true);
       window.removeEventListener("pointerup", finishPointerSelection);
       window.removeEventListener("pointercancel", finishPointerSelection);
       try {

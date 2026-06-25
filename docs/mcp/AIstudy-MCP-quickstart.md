@@ -108,7 +108,17 @@ AISTUDY_MCP_ALLOW_EDIT = "0"
 - `read_node_document`
 - `write_node_document`
 - `append_node_document`
+- `format_node_document`
 - `update_node_document_style`
+
+文档工具分工：
+
+- 写新内容：`write_node_document`
+- 追加内容：`append_node_document`
+- 不改内容的样式清理：`format_node_document`
+- 简单全文样式：`update_node_document_style`
+
+不要为了排版调用 `write_node_document` 重写整篇文档；节点已有内容时，`write_node_document` 默认拒绝覆盖，只有用户明确要求整篇覆盖时才传 `replaceExisting: true`。不要手写编辑器内部元素或用大量空行制造间距。`format_node_document` 只允许改样式，必须保证元素数量一致、所有 `value` 逐字不变；它不能清理空行、缩进正文、拆段或合段。
 
 ### 本地定位
 
@@ -189,7 +199,7 @@ AISTUDY_MCP_ALLOW_EDIT = "0"
 
 ### 编辑文档
 
-`mcp_resolve_target({ courseName, nodeQuery })` -> `read_node_document` -> `write_node_document` 或 `append_node_document` -> 重新读取文档确认结果
+`mcp_resolve_target({ courseName, nodeQuery })` -> `read_node_document` -> 按任务选择 `write_node_document` / `append_node_document` / `format_node_document` / `update_node_document_style` -> 重新读取文档确认结果
 
 ### 打开网页端口
 

@@ -643,7 +643,7 @@ function createMcpPrompt(name: string, args: Record<string, unknown>) {
     aistudy_start: "你已经接入 AIstudy MCP。请先调用 mcp_get_started，再按返回的 nextSteps 做只读探测，不要进行编辑。",
     aistudy_read_knowledge: `请用 AIstudy MCP 读取知识库内容。目标：${target || "由用户当前问题决定"}。先 mcp_get_started，再 mcp_resolve_target，不要猜 courseId 或 nodeId。`,
     aistudy_edit_mindmap: `请用 AIstudy MCP 编辑思维导图。需求：${intent || "未提供"}。先 mcp_plan_task，再 mcp_resolve_target，确认 AISTUDY_MCP_ALLOW_EDIT=1 后只调用必要的编辑工具。`,
-    aistudy_edit_document: `请用 AIstudy MCP 编辑节点文档。需求：${intent || "未提供"}。先解析 courseId/nodeId，读出现有文档，再写入或追加。`
+    aistudy_edit_document: `请用 AIstudy MCP 编辑节点文档。需求：${intent || "未提供"}。先解析 courseId/nodeId 并读取现有文档。新增内容用 append_node_document；整理排版用 format_node_document，它只能改样式，不能改正文、空行或缩进；write_node_document 只用于新文档，覆盖已有全文必须由用户明确要求并传 replaceExisting=true。`
   };
   const text = textByName[name];
   if (!text) throw new Error("Unknown MCP prompt.");
