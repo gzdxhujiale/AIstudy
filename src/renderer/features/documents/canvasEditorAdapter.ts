@@ -42,6 +42,7 @@ const INLINE_STYLE_KEYS: InlineStyleKey[] = [
   "strikeout",
   "textDecoration"
 ];
+const MANUAL_ORDERED_PREFIX_PATTERN = /^\s*(?:\d+|[一二三四五六七八九十百千]+)[\.．、)\）]\s*/;
 
 function loadCanvasEditor() {
   if (canvasEditorModulePromise) return canvasEditorModulePromise;
@@ -155,6 +156,13 @@ function hasVisibleText(element: IElement) {
   return isTextElement(element) && element.value.replace(/\s/g, "").length > 0;
 }
 
+function createSmartListId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `smart-ol-${crypto.randomUUID()}`;
+  }
+  return `smart-ol-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function findParagraphBounds(elementList: IElement[], index: number) {
   let start = 0;
   let end = elementList.length - 1;
@@ -241,6 +249,19 @@ function inheritDocumentInputStyle(content: IEditorData, range: CanvasRange) {
     },
     changed: true
   };
+}
+
+function restoreRange(editor: CanvasEditorInstance, range: CanvasRange, mainLength: number) {
+  const maxIndex = Math.max(0, mainLength - 1);
+  editor.command.executeSetRange(
+    Math.min(range.startIndex, maxIndex),
+    Math.min(range.endIndex, maxIndex),
+    range.tableId,
+    range.startTdIndex,
+    range.endTdIndex,
+    range.startTrIndex,
+    range.endTrIndex
+  );
 }
 
 function normalizeSnapshot(value: unknown): KnowledgeDocumentSnapshot {
@@ -448,6 +469,54 @@ export async function createCanvasDocumentEditor(
     rememberRange();
     emitSnapshotNow();
   };
+  const normalizeOrderedLists = (content: IEditorData) => {
+    let changed = false;
+    let activeListId: string | null = null;
+
+    const nextMain = content.main.map((element) => {
+      if (!isTextElement(element)) {
+        activeListId = null;
+        return element;
+      }
+
+      const rawValue = toElementText(element.value);
+      const isOrderedElement = element.listType === ListType.OL;
+
+      if (!isOrderedElement) {
+        if (rawValue.trim() || isParagraphBoundary(element)) activeListId = null;
+        return element;
+      }
+
+      if (!activeListId) {
+        activeListId = typeof element.listId === "string" && element.listId ? element.listId : createSmartListId();
+      }
+
+      const nextValue = rawValue.replace(MANUAL_ORDERED_PREFIX_PATTERN, "");
+      const nextElement = {
+        ...element,
+        value: nextValue,
+        listType: ListType.OL,
+        listStyle: ListStyle.DECIMAL,
+        listId: activeListId
+      } as IElement;
+
+      if (
+        nextElement.value !== element.value ||
+        nextElement.listType !== element.listType ||
+        nextElement.listStyle !== element.listStyle ||
+        nextElement.listId !== element.listId
+      ) {
+        changed = true;
+      }
+
+      return nextElement;
+    });
+
+    return {
+      content: changed ? { ...content, main: nextMain } : content,
+      changed
+    };
+  };
   const readCurrentSelectionElementList = () => {
     try {
       return editor.command.getRangeContext()?.selectionElementList ?? [];
@@ -498,21 +567,17 @@ export async function createCanvasDocumentEditor(
 
     const range = editor.command.getRange();
     const currentValue = editor.command.getValue();
-    const normalizedInputStyle = inheritDocumentInputStyle(normalizeEditorData(currentValue.data), range);
+    let nextContent = normalizeEditorData(currentValue.data);
+    const normalizedInputStyle = inheritDocumentInputStyle(nextContent, range);
+    nextContent = normalizedInputStyle.content;
+    const normalizedLists = normalizeOrderedLists(nextContent);
+    nextContent = normalizedLists.content;
 
-    if (normalizedInputStyle.changed) {
+    if (normalizedInputStyle.changed || normalizedLists.changed) {
       isNormalizingInputStyle = true;
       try {
-        editor.command.executeSetValue(normalizedInputStyle.content, { isSetCursor: false });
-        editor.command.executeSetRange(
-          range.startIndex,
-          range.endIndex,
-          range.tableId,
-          range.startTdIndex,
-          range.endTdIndex,
-          range.startTrIndex,
-          range.endTrIndex
-        );
+        editor.command.executeSetValue(nextContent, { isSetCursor: false });
+        restoreRange(editor, range, nextContent.main.length);
       } finally {
         isNormalizingInputStyle = false;
       }
