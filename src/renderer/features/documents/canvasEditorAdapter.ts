@@ -374,6 +374,7 @@ export async function createCanvasDocumentEditor(
   let isNormalizingInputStyle = false;
   let isPointerSelecting = false;
   let lastRange: CanvasRange | null = null;
+  let pendingSnapshotTimer: number | null = null;
   let pendingFormatFrame: number | null = null;
   let pendingFormatState: KnowledgeDocumentFormatState | null = null;
   let lastFormatState: KnowledgeDocumentFormatState = {
@@ -423,11 +424,29 @@ export async function createCanvasDocumentEditor(
       return false;
     }
   };
+  const emitSnapshotNow = () => {
+    if (pendingSnapshotTimer !== null) {
+      window.clearTimeout(pendingSnapshotTimer);
+      pendingSnapshotTimer = null;
+    }
+    const nextSnapshot = toSnapshot(editor);
+    events.onSnapshotChanged?.(nextSnapshot);
+    return nextSnapshot;
+  };
+  const scheduleSnapshot = () => {
+    if (pendingSnapshotTimer !== null) {
+      window.clearTimeout(pendingSnapshotTimer);
+    }
+    pendingSnapshotTimer = window.setTimeout(() => {
+      pendingSnapshotTimer = null;
+      events.onSnapshotChanged?.(toSnapshot(editor));
+    }, 320);
+  };
   const runFormatCommand = (action: () => void) => {
     restoreRememberedRange();
     action();
     rememberRange();
-    events.onSnapshotChanged?.(toSnapshot(editor));
+    emitSnapshotNow();
   };
   const readCurrentSelectionElementList = () => {
     try {
@@ -473,7 +492,7 @@ export async function createCanvasDocumentEditor(
 
   editor.listener.contentChange = () => {
     if (isNormalizingInputStyle) {
-      events.onSnapshotChanged?.(toSnapshot(editor));
+      scheduleSnapshot();
       return;
     }
 
@@ -499,7 +518,7 @@ export async function createCanvasDocumentEditor(
       }
     }
 
-    events.onSnapshotChanged?.(toSnapshot(editor));
+    scheduleSnapshot();
   };
   editor.listener.rangeStyleChange = (payload) => {
     scheduleFormatState(toFormatState(payload));
@@ -517,7 +536,13 @@ export async function createCanvasDocumentEditor(
   ]);
 
   return {
-    getSnapshot: () => toSnapshot(editor),
+    getSnapshot: () => {
+      if (pendingSnapshotTimer !== null) {
+        window.clearTimeout(pendingSnapshotTimer);
+        pendingSnapshotTimer = null;
+      }
+      return toSnapshot(editor);
+    },
     getSelectedText: () => rememberSelectedText() || lastSelectedText,
     hasSelection: () => {
       if (!restoreRememberedRange()) return false;
@@ -534,7 +559,7 @@ export async function createCanvasDocumentEditor(
       if (command === "subscript") runFormatCommand(() => editor.command.executeSubscript());
       if (command === "pageBreak") runFormatCommand(() => editor.command.executePageBreak());
       if (command === "separator") runFormatCommand(() => editor.command.executeSeparator([4, 2], { lineWidth: 1, color: "#94a3b8" }));
-      if (command === "save") events.onSnapshotChanged?.(toSnapshot(editor));
+      if (command === "save") emitSnapshotNow();
     },
     setFontFamily: (fontFamily) => {
       runFormatCommand(() => editor.command.executeFont(fontFamily));
@@ -597,6 +622,11 @@ export async function createCanvasDocumentEditor(
       editor.command.executeFocus();
     },
     destroy: () => {
+      if (pendingSnapshotTimer !== null) {
+        window.clearTimeout(pendingSnapshotTimer);
+        pendingSnapshotTimer = null;
+        events.onSnapshotChanged?.(toSnapshot(editor));
+      }
       if (pendingFormatFrame !== null) {
         window.cancelAnimationFrame(pendingFormatFrame);
         pendingFormatFrame = null;
