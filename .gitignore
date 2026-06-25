@@ -5,6 +5,7 @@ release/
 release-*/
 artifacts/
 .tmp/
+.codex-tmp/
 .runtime/
 .vite/
 *.log

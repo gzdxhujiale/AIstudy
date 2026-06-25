@@ -5,20 +5,20 @@
 ## 最新版本
 
 - 版本号：0.1.68
-- 更新时间：2026-06-26 01:13:02
+- 更新时间：2026-06-26 01:48:13
 - 功能更新：一键打包生成安装包
 - GitHub：https://github.com/SnowLove0303/AIstudy-Public.git
 - 分支：codex/mcp-control-panel
-- 提交：b821e89
+- 提交：633bd6a
 
 ## 更新记录
 
-### 0.1.68 - 2026-06-26 01:13:02
+### 0.1.68 - 2026-06-26 01:48:13
 
 - 一键打包生成安装包
 - GitHub：https://github.com/SnowLove0303/AIstudy-Public.git
 - 分支：codex/mcp-control-panel
-- 提交：b821e89
+- 提交：633bd6a
 
 ### 0.1.67 - 2026-06-24 23:55:58
 

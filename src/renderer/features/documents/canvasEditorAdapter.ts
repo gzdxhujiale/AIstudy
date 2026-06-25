@@ -19,10 +19,21 @@ const MIN_LANDSCAPE_PAGE_WIDTH = 960;
 const ZERO_WIDTH_BREAK = "\u200B";
 const MAX_TEXT_RUN_LENGTH = 360;
 const FORCE_TEXT_RUN_SPLIT_LENGTH = MAX_TEXT_RUN_LENGTH * 2;
+const DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE = "data-aistudy-document-scroll-id";
+const FAST_SELECTION_CHANGE_EVENT = "aistudy:selection-range-change";
+const FAST_SELECTION_VIEWPORT_BUFFER = 96;
 
 type CanvasEditorModule = typeof import("@hufe921/canvas-editor");
 type CanvasEditorInstance = InstanceType<CanvasEditorModule["default"]>;
+type CanvasEditorOptions = NonNullable<ConstructorParameters<CanvasEditorModule["default"]>[2]> & {
+  aistudyFastSelection?: boolean;
+};
 type CanvasRange = ReturnType<CanvasEditorInstance["command"]["getRange"]>;
+type CanvasRangeRect = { x: number; y: number; width: number; height: number };
+type CanvasRangeContext = {
+  isCollapsed?: boolean;
+  rangeRects?: CanvasRangeRect[];
+} | null;
 type InlineStyleKey = "font" | "size" | "bold" | "color" | "highlight" | "italic" | "underline" | "strikeout" | "textDecoration";
 
 type CanvasDocumentEvents = {
@@ -454,6 +465,35 @@ function getLandscapePageSize(container: HTMLDivElement) {
   };
 }
 
+function createDocumentScrollContainerSelector(container: HTMLDivElement): { selector: string; element: HTMLElement | null; cleanup: () => void } {
+  const scrollContainer = container.parentElement instanceof HTMLElement ? container.parentElement : null;
+  if (!scrollContainer) return { selector: "", element: null, cleanup: () => undefined };
+
+  const existingId = scrollContainer.getAttribute(DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE);
+  if (existingId) {
+    return {
+      selector: `[${DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE}="${existingId}"]`,
+      element: scrollContainer,
+      cleanup: () => undefined
+    };
+  }
+
+  const id = typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? `doc-scroll-${crypto.randomUUID()}`
+    : `doc-scroll-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  scrollContainer.setAttribute(DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE, id);
+
+  return {
+    selector: `[${DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE}="${id}"]`,
+    element: scrollContainer,
+    cleanup: () => {
+      if (scrollContainer.getAttribute(DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE) === id) {
+        scrollContainer.removeAttribute(DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE);
+      }
+    }
+  };
+}
+
 export async function createCanvasDocumentEditor(
   container: HTMLDivElement,
   snapshot: KnowledgeDocumentSnapshot,
@@ -461,10 +501,11 @@ export async function createCanvasDocumentEditor(
 ): Promise<KnowledgeDocumentEditorHandle> {
   const { default: Editor, EditorMode, PageMode, PaperDirection, RenderMode, RowFlex, ListType, ListStyle, TitleLevel } = await loadCanvasEditor();
   const pageSize = getLandscapePageSize(container);
-  const editor = new Editor(container, normalizeEditorData(normalizeSnapshot(snapshot).content), {
+  const scrollContainer = createDocumentScrollContainerSelector(container);
+  const editorOptions: CanvasEditorOptions = {
     mode: EditorMode.EDIT,
     pageMode: PageMode.CONTINUITY,
-    paperDirection: PaperDirection.HORIZONTAL,
+    paperDirection: PaperDirection.VERTICAL,
     renderMode: RenderMode.SPEED,
     defaultFont: "Microsoft YaHei",
     defaultSize: DEFAULT_FONT_SIZE,
@@ -473,13 +514,26 @@ export async function createCanvasDocumentEditor(
     maxSize: 72,
     historyMaxRecordCount: 60,
     pageGap: 16,
-    width: pageSize.height,
-    height: pageSize.width,
+    width: pageSize.width,
+    height: pageSize.height,
     margins: [64, 64, 64, 64],
+    scrollContainerSelector: scrollContainer.selector,
+    pageOuterSelectionDisable: true,
+    aistudyFastSelection: true,
     list: {
       inheritStyle: true
     }
-  });
+  };
+  const editor = new Editor(container, normalizeEditorData(normalizeSnapshot(snapshot).content), editorOptions);
+  const editorContainer = editor.command.getContainer();
+  const selectionOverlay = document.createElement("div");
+  selectionOverlay.style.position = "absolute";
+  selectionOverlay.style.inset = "0";
+  selectionOverlay.style.zIndex = "4";
+  selectionOverlay.style.pointerEvents = "none";
+  selectionOverlay.style.overflow = "visible";
+  selectionOverlay.style.display = "none";
+  editorContainer.append(selectionOverlay);
 
   let lastSelectedText = "";
   let isNormalizingInputStyle = false;
@@ -494,6 +548,7 @@ export async function createCanvasDocumentEditor(
   let normalizationRequestId = 0;
   let pendingFormatFrame: number | null = null;
   let pendingFormatState: KnowledgeDocumentFormatState | null = null;
+  let pendingSelectionOverlayFrame: number | null = null;
   let lastFormatState: KnowledgeDocumentFormatState = {
     fontFamily: "Microsoft YaHei",
     fontSize: DEFAULT_FONT_SIZE,
@@ -784,16 +839,97 @@ export async function createCanvasDocumentEditor(
     if (pendingFormatFrame !== null) return;
     pendingFormatFrame = window.requestAnimationFrame(flushFormatState);
   };
+  const getSelectionViewportBounds = () => {
+    const editorRect = editorContainer.getBoundingClientRect();
+    const viewportRect = scrollContainer.element?.getBoundingClientRect() ?? {
+      top: 0,
+      bottom: window.innerHeight
+    };
+    return {
+      top: viewportRect.top - editorRect.top - FAST_SELECTION_VIEWPORT_BUFFER,
+      bottom: viewportRect.bottom - editorRect.top + FAST_SELECTION_VIEWPORT_BUFFER
+    };
+  };
+  const readSelectionRangeRects = () => {
+    try {
+      const context = editor.command.getRangeContext() as CanvasRangeContext;
+      if (!context || context.isCollapsed || !Array.isArray(context.rangeRects)) return [];
+      return context.rangeRects.filter((rect) => {
+        return Number.isFinite(rect.x) && Number.isFinite(rect.y) && Number.isFinite(rect.width) && Number.isFinite(rect.height) && rect.height > 0;
+      });
+    } catch {
+      return [];
+    }
+  };
+  const renderSelectionOverlay = () => {
+    pendingSelectionOverlayFrame = null;
+    if (!isPointerSelecting) {
+      selectionOverlay.replaceChildren();
+      selectionOverlay.style.display = "none";
+      return;
+    }
+
+    const { top, bottom } = getSelectionViewportBounds();
+    const fragment = document.createDocumentFragment();
+    let visibleRectCount = 0;
+
+    for (const rect of readSelectionRangeRects()) {
+      if (rect.y + rect.height < top || rect.y > bottom) continue;
+      const item = document.createElement("div");
+      item.style.position = "absolute";
+      item.style.left = `${rect.x}px`;
+      item.style.top = `${rect.y}px`;
+      item.style.width = `${Math.max(rect.width, 2)}px`;
+      item.style.height = `${rect.height}px`;
+      item.style.background = "rgba(174, 203, 250, 0.6)";
+      item.style.borderRadius = "1px";
+      fragment.append(item);
+      visibleRectCount += 1;
+    }
+
+    selectionOverlay.replaceChildren(fragment);
+    selectionOverlay.style.display = visibleRectCount > 0 ? "block" : "none";
+  };
+  const scheduleSelectionOverlay = () => {
+    if (!isPointerSelecting || pendingSelectionOverlayFrame !== null) return;
+    pendingSelectionOverlayFrame = window.requestAnimationFrame(renderSelectionOverlay);
+  };
+  const clearSelectionOverlay = () => {
+    if (pendingSelectionOverlayFrame !== null) {
+      window.cancelAnimationFrame(pendingSelectionOverlayFrame);
+      pendingSelectionOverlayFrame = null;
+    }
+    selectionOverlay.replaceChildren();
+    selectionOverlay.style.display = "none";
+  };
+  const handleFastSelectionRangeChange = () => {
+    scheduleSelectionOverlay();
+  };
+  const commitFastSelectionRange = () => {
+    const range = rememberRange();
+    if (!range || !isSelectedRange(range)) return;
+    editor.command.executeSetRange(
+      range.startIndex,
+      range.endIndex,
+      range.tableId,
+      range.startTdIndex,
+      range.endTdIndex,
+      range.startTrIndex,
+      range.endTrIndex
+    );
+  };
   const finishPointerSelection = () => {
     if (!isPointerSelecting) return;
     isPointerSelecting = false;
-    rememberRange();
+    commitFastSelectionRange();
+    clearSelectionOverlay();
     if (!pendingFormatState || pendingFormatFrame !== null) return;
     pendingFormatFrame = window.requestAnimationFrame(flushFormatState);
   };
   const handlePointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
     isPointerSelecting = true;
+    clearSelectionOverlay();
   };
   const markUserEdited = () => {
     hasUserEdited = true;
@@ -807,6 +943,7 @@ export async function createCanvasDocumentEditor(
     cancelBlankListKeyboardAction(event);
   };
   container.addEventListener("pointerdown", handlePointerDown, true);
+  container.addEventListener(FAST_SELECTION_CHANGE_EVENT, handleFastSelectionRangeChange);
   container.addEventListener("beforeinput", handleBeforeInput, true);
   container.addEventListener("keydown", handleKeyDown, true);
   container.addEventListener("paste", markUserEdited, true);
@@ -944,7 +1081,9 @@ export async function createCanvasDocumentEditor(
         window.cancelAnimationFrame(pendingFormatFrame);
         pendingFormatFrame = null;
       }
+      clearSelectionOverlay();
       container.removeEventListener("pointerdown", handlePointerDown, true);
+      container.removeEventListener(FAST_SELECTION_CHANGE_EVENT, handleFastSelectionRangeChange);
       container.removeEventListener("beforeinput", handleBeforeInput, true);
       container.removeEventListener("keydown", handleKeyDown, true);
       container.removeEventListener("paste", markUserEdited, true);
@@ -959,6 +1098,7 @@ export async function createCanvasDocumentEditor(
         // canvas-editor removes its own container during destroy. During rapid
         // mode/node switches that container may already be detached by React.
       }
+      scrollContainer.cleanup();
     }
   };
 }
