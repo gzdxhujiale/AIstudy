@@ -79,6 +79,27 @@ async function tryRun(command, commandArgs, options = {}) {
   }
 }
 
+function quoteCmdArg(value) {
+  const text = String(value);
+  if (!/[()\[\]{}^=;!'+,`~\s&|<>"]/.test(text)) return text;
+  return `"${text.replace(/"/g, '\\"')}"`;
+}
+
+async function runGh(commandArgs) {
+  if (process.platform === "win32") {
+    const whereGh = await tryRun("where.exe", ["gh"]);
+    const candidates = whereGh.ok ? whereGh.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) : [];
+    const candidate = candidates.find((item) => /\.(exe|cmd|bat)$/i.test(item)) || candidates[0];
+    if (candidate && /\.(cmd|bat)$/i.test(candidate)) {
+      return tryRun("cmd.exe", ["/d", "/s", "/c", [quoteCmdArg(candidate), ...commandArgs.map(quoteCmdArg)].join(" ")]);
+    }
+    if (candidate) {
+      return tryRun(candidate, commandArgs);
+    }
+  }
+  return tryRun("gh", commandArgs);
+}
+
 async function readPackageJson() {
   return JSON.parse(await fs.readFile(path.join(projectRoot, "package.json"), "utf8"));
 }
@@ -164,10 +185,10 @@ async function checkWorktree() {
 }
 
 async function checkGh() {
-  const gh = await tryRun("gh", ["--version"]);
+  const gh = await runGh(["--version"]);
   if (gh.ok) {
     addCheck("gh", "ok", "GitHub CLI is available.", gh.stdout.split(/\r?\n/)[0] || "gh");
-    const auth = await tryRun("gh", ["auth", "status"]);
+    const auth = await runGh(["auth", "status"]);
     addCheck("gh-auth", auth.ok ? "ok" : "warning", auth.ok ? "GitHub CLI authentication is available." : "GitHub CLI authentication is not ready.", auth.ok ? "" : auth.error);
     return;
   }
