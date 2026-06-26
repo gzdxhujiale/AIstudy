@@ -10,73 +10,43 @@ npm run setup:install
 npm run dev:app
 ```
 
-默认 MySQL 数据库固定为 `aistudy_public`，公开版表名也固定为公开版专用表。应用启动时会自动创建数据库和基础表；如果本机没有 MySQL，核心编辑会降级到本地副本，不阻塞界面使用。
+日常改功能时用 `npm run dev:app` 验证；渲染器 UI 改动会热更新，主进程或 preload 改动后重新运行即可。发布前再运行 `npm run dist:oneclick`。
 
-日常改功能时用 `npm run dev:app` 验证，不需要打安装包。渲染器 UI 改动会热更新；主进程或 preload 改动时，停止后重新运行 `npm run dev:app` 即可。只有发布前才运行 `npm run dist:oneclick`。
+新机器开发或打包前先运行 `npm run setup:doctor`。弱网或离线打包流程见 `docs/deployment-new-machine.md`。
 
-可选连接配置见 `.env.example` 或运行时 `AIstudyPublicData/config/mysql.config.json`。公开版运行时只读取 MySQL 的 `host`、`port`、`user`、`password`；不再自动检测旧 `aistudy` 库，也不支持通过环境变量或配置文件覆盖数据库名和表名。升级安装包只更新程序文件，不会重置本机连接配置或清空已有 MySQL 数据。
+同步 GitHub 前运行 `npm run github:sync:doctor`，检查本机 Git、远端分支、未提交改动、GitHub CLI 和 Release 安装包资产；详见 `docs/github-sync.md`。
 
-新机器开发或打包前先运行 `npm run setup:doctor`。弱网或离线打包时，先在有网络的机器运行 `npm run setup:install` 和 `npm run dist:oneclick`，再复制 `node_modules` 与 `.tmp/build-cache`。详见 `docs/deployment-new-machine.md`。
+## Repository Map
 
-同步 GitHub 前运行 `npm run github:sync:doctor` 检查本机 Git、远端分支、未提交改动、GitHub CLI 和 Release 安装包资产；详见 `docs/github-sync.md`。
+- `src/renderer/features/`：React 渲染器功能模块，每个模块维护自己的边界和 README。
+- `electron/`：Electron 主进程、preload、IPC、MySQL、导出、备份、更新和系统能力。
+- `scripts/`：开发、打包、QA、导入器、MCP server、架构知识同步等维护脚本。
+- `docs/`：架构基线、功能契约、MCP 接入、部署和仓库协作说明。
+- `assets/`、`build/`：静态资源和打包资源。
 
-## Architecture Direction
+## Documentation
 
-- Desktop shell: Electron + React + TypeScript + Vite
-- Packaging: electron-builder
-- Mind map editor: simple-mind-map
-- Document editor: @hufe921/canvas-editor
-- Database: MySQL
-- Large assets: local file storage with hash deduplication
+- `docs/README.md`：完整文档导航，第一次接手项目从这里继续读。
+- `docs/ARCHITECTURE.md`：当前架构基线和不可破坏的边界。
+- `docs/功能规划/README.md`：功能规划、存储契约、UI 约束和模块规则索引。
+- `docs/mcp/INDEX.md`：MCP 接入、权限、远程访问和运行时代码入口。
+- `docs/codex/CODEX_HANDOFF.md`：Codex 接手项目、构建、验证和交付指引。
+- `scripts/README.md`：维护脚本分布和使用边界。
 
-See `docs/ARCHITECTURE.md`.
+## Runtime Rules
 
-## Module Rules
+- 默认 MySQL 数据库固定为 `aistudy_public`，公开版表名固定为公开版专用表。
+- 应用启动时会自动创建数据库和基础表；如果本机没有 MySQL，核心编辑会降级到本地副本，不阻塞界面使用。
+- 可选连接配置见 `.env.example` 或运行时 `AIstudyPublicData/config/mysql.config.json`。
+- 公开版运行时只读取 MySQL 的 `host`、`port`、`user`、`password`；不支持覆盖数据库名和表名。
+- 升级安装包只更新程序文件，不会重置本机连接配置或清空已有 MySQL 数据。
 
-- New features must be built as feature modules instead of being folded into one large component.
-- Every feature module needs its own `README.md` that records scope, boundaries, user flow, and extension rules.
-- The root README records only project-level rules and the main architecture direction.
-- Before building a new feature, check whether mature GitHub or open-source projects already solve the same problem. Reuse proven patterns when they fit AIstudy's storage and UI constraints.
-- Codex handoff and development takeover rules are tracked in `docs/codex/CODEX_HANDOFF.md`; update it when project location, repository, build flow, architecture boundary, or release flow changes.
-- Development-side architecture notes can be synced to the private `AIstudy 全量功能架构` knowledge base with `npm run arch:knowledge:sync`; the Codex handoff document has dedicated commands `npm run codex:handoff:sync` and `npm run codex:handoff:commit`.
+## Development Boundaries
 
-## Course Storage Reliability
-
-- Course and section changes use command-style IPC instead of renderer-side full-store writes.
-- MySQL is the formal source for course and section indexes.
-- Course and section ordering uses dedicated reorder commands, so drag-and-drop does not rewrite the whole store from the renderer.
-- Course right-click "copy local path" creates a local locator file under `AIstudyPublicData/locators/courses`, so other Codex sessions can open that file and immediately find the MySQL database, course id, and related tables.
-- `courses.json` is only a lightweight local mirror and fallback when MySQL is unavailable.
-- If MySQL write fails, course and section commands append a lightweight operation to `course-pending-operations.json`; the next successful `courses:load` replays those operations before reading MySQL.
-- `courses.json` and `course-pending-operations.json` are written atomically. If either file is unreadable, the app quarantines it with a `.corrupt-*.json` suffix instead of blocking startup.
-- The course sidebar shows a plain-language save status so users know whether content is saved, waiting to sync, or needs another try.
-
-## Storage Boundaries
-
-- Mind map and document snapshots store editor JSON only, with retention limits.
-- Large images, attachments, and future importer assets must go through `knowledge_assets` and `knowledge_asset_links`.
-- Assets are deduplicated by SHA-256 and linked back to course/map/node/document scope instead of being embedded as long base64 strings.
-- Run `npm run qa:error-codes` after adding new failure paths or error codes.
-
-## Importer Direction
-
-- Importer is now a standalone module under `src/renderer/features/importer`.
-- The first UI entry is a drag-and-drop modal in the Word document workspace.
-- Current controlled import supports `.txt`, `.md`, `.markdown`, and `.docx` into the current node document.
-- OCR-heavy batch imports use `scripts/importers/import-docx-to-node-documents.mjs` and must pass repeated dry-run self-checks before writing to MySQL.
-- After batch import, run `npm run audit:docx-import` to compare the DOCX source, generated snapshots, MySQL content, noise cleanup, and style profile.
-- MCP import is planned as a later entry, but it must use the same importer package and commit flow.
-
-## Reusable Runtime Direction
-
-- Runtime state is consolidated under `AIstudyPublicData` so the public app can move between machines with its data folder.
-- `AISTUDY_PUBLIC_DATA_ROOT` can override the data root for portable or managed deployments.
-- Course mirrors, pending operations, Chrome profiles, and downloaded updates use the shared data root.
-- MySQL, Chrome, AI web sessions, and GitHub updates are external capabilities; they must degrade without blocking the core learning workspace.
-
-## Error Log Policy
-
-- User-facing pages must not show raw code errors, file paths, stack traces, or database details.
-- The app shows plain-language messages such as "操作没有完成，请稍后再试。"
-- Technical details are recorded by the Electron main process in the MySQL `app_error_logs` table.
-- Settings has a dedicated error log page for recent user-readable failures and error identifiers.
+- 新功能必须进入 feature module，不继续堆进一个大组件。
+- Renderer 不直接写 MySQL，持久化通过 Electron 主进程 IPC 命令收口。
+- 思维导图由 `simple-mind-map` 承担，Word 类文档由 `@hufe921/canvas-editor` 承担。
+- 大图片、附件和未来导入资产必须走 `knowledge_assets` 与 `knowledge_asset_links`，不要塞进长 JSON。
+- 新增失败路径或错误码后运行 `npm run qa:error-codes`。
+- 用户界面不显示原始堆栈、数据库细节、文件路径或技术错误；技术细节进入主进程错误日志。
+- 改动架构边界、构建流程、发布流程或接手规则时，同步更新 `docs/codex/CODEX_HANDOFF.md`。
