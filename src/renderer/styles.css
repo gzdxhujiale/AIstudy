@@ -268,6 +268,11 @@ select {
   align-items: center;
 }
 
+.exam-header > div:first-child {
+  display: grid;
+  gap: 1px;
+}
+
 .exam-tabs {
   gap: 6px;
 }
@@ -524,13 +529,13 @@ select {
 .exam-empty {
   display: grid;
   place-items: center;
-  min-height: 140px;
+  min-height: 96px;
   color: var(--text-faint);
   font-size: 13px;
 }
 
 .exam-empty.compact {
-  min-height: 72px;
+  min-height: 48px;
 }
 
 .exam-modal-backdrop {
@@ -643,14 +648,14 @@ select {
 .exam-paper-layout,
 .exam-records-layout {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
 }
 
 .exam-paper-list,
 .exam-attempt-list {
   min-width: 0;
   min-height: 0;
-  padding: 18px 14px;
+  padding: 18px 16px;
   overflow: auto;
   border-right: 1px solid rgba(123, 145, 169, 0.12);
   background: #f8fafc;
@@ -734,19 +739,22 @@ select {
 .exam-attempt-detail {
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
-  padding: 18px;
+  overflow: auto;
+  padding: 18px 20px 22px;
 }
 
 .exam-paper-editor {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 14px;
+  grid-template-rows: auto auto;
+  align-content: start;
+  gap: 16px;
 }
 
 .exam-paper-form {
-  grid-template-columns: minmax(160px, 280px) 120px minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(220px, 360px) 120px minmax(260px, 1fr) auto;
   align-items: end;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(123, 145, 169, 0.12);
 }
 
 .exam-paper-form label.wide {
@@ -755,14 +763,16 @@ select {
 
 .exam-paper-columns {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(520px, 1.15fr) minmax(360px, 0.85fr);
+  align-items: start;
   min-height: 0;
-  gap: 14px;
+  gap: 16px;
 }
 
 .exam-paper-columns > section {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: start;
   min-width: 0;
   min-height: 0;
   padding: 14px;
@@ -826,14 +836,14 @@ select {
 .exam-paper-section-stack {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
 }
 
 .exam-paper-section {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   padding: 10px;
   border: 1px solid rgba(123, 145, 169, 0.14);
   border-radius: 8px;
@@ -854,12 +864,16 @@ select {
 }
 
 .exam-paper-section-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   justify-content: space-between;
+  align-items: start;
 }
 
 .exam-paper-section-fields {
   display: grid;
-  gap: 6px;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr);
+  gap: 8px;
   min-width: 0;
   flex: 1;
 }
@@ -882,6 +896,7 @@ select {
 
 .exam-paper-section-actions {
   flex: 0 0 auto;
+  min-height: 30px;
 }
 
 .exam-paper-section-actions span {

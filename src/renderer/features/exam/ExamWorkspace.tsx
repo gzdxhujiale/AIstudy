@@ -1188,7 +1188,7 @@ function PaperBuilderView({
                 <span>{selectedSection?.title ?? "未选分区"}</span>
                 <label>
                   <Search size={14} />
-                  <input value={paperQuestionSearch} onChange={(event) => onPaperSearchChange(event.target.value)} />
+                  <input placeholder="搜索题目" value={paperQuestionSearch} onChange={(event) => onPaperSearchChange(event.target.value)} />
                 </label>
               </div>
             </div>
