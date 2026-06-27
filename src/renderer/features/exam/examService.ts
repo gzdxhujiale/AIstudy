@@ -5,6 +5,7 @@ import type {
   ExamGradeResult,
   ExamOption,
   ExamPaper,
+  ExamPaperSection,
   ExamQuestion,
   ExamQuestionType,
   ExamStore
@@ -14,6 +15,7 @@ const EXAM_STORE_KEY = "exam:store";
 const STORE_VERSION = 1 as const;
 const DEFAULT_DURATION_MINUTES = 60;
 const DEFAULT_QUESTION_SCORE = 5;
+const DEFAULT_PAPER_SECTION_TITLE = "试卷题目";
 
 export type ExamCourseScope = {
   courseId: string | null;
@@ -89,6 +91,10 @@ function normalizeQuestionType(value: unknown): ExamQuestionType {
   return value === "multiple" || value === "judge" || value === "short" ? value : "single";
 }
 
+function uniqueIds(values: string[]) {
+  return Array.from(new Set(values.map(normalizeString).filter(Boolean)));
+}
+
 export function createDefaultOptions(type: ExamQuestionType): ExamOption[] {
   if (type === "judge") {
     return [
@@ -155,6 +161,39 @@ function normalizeQuestion(value: unknown): ExamQuestion | null {
   };
 }
 
+function normalizePaperSection(value: unknown, index: number, questionIds: Set<string>): ExamPaperSection {
+  const candidate = value && typeof value === "object" ? value as Partial<ExamPaperSection> : {};
+  const ids = Array.isArray(candidate.questionIds)
+    ? uniqueIds(candidate.questionIds).filter((id) => questionIds.has(id))
+    : [];
+  return {
+    id: normalizeString(candidate.id) || createId("section"),
+    title: normalizeString(candidate.title) || `第 ${index + 1} 部分`,
+    description: normalizeString(candidate.description),
+    questionIds: ids
+  };
+}
+
+function normalizePaperSections(value: unknown, legacyQuestionIds: string[], questionIds: Set<string>) {
+  const source = Array.isArray(value) ? value : [];
+  const sections = source.map((section, index) => normalizePaperSection(section, index, questionIds));
+  if (sections.length) return sections;
+  if (!legacyQuestionIds.length) return [createPaperSectionDraft()];
+  return [{
+    id: createId("section"),
+    title: DEFAULT_PAPER_SECTION_TITLE,
+    description: "",
+    questionIds: legacyQuestionIds
+  }];
+}
+
+export function getPaperQuestionIds(paper: Pick<ExamPaper, "questionIds" | "sections">) {
+  const sectionIds = Array.isArray(paper.sections)
+    ? paper.sections.flatMap((section) => section.questionIds)
+    : [];
+  return uniqueIds(sectionIds.length ? sectionIds : paper.questionIds);
+}
+
 function normalizePaper(value: unknown, questionIds: Set<string>): ExamPaper | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<ExamPaper>;
@@ -163,8 +202,10 @@ function normalizePaper(value: unknown, questionIds: Set<string>): ExamPaper | n
   const createdAt = normalizeString(candidate.createdAt) || nowIso();
   const updatedAt = normalizeString(candidate.updatedAt) || createdAt;
   const ids = Array.isArray(candidate.questionIds)
-    ? candidate.questionIds.map(normalizeString).filter((id) => id && questionIds.has(id))
+    ? uniqueIds(candidate.questionIds).filter((id) => questionIds.has(id))
     : [];
+  const sections = normalizePaperSections(candidate.sections, ids, questionIds);
+  const normalizedQuestionIds = getPaperQuestionIds({ questionIds: ids, sections });
   return {
     id: normalizeString(candidate.id) || createId("paper"),
     courseId: normalizeCourseId(candidate.courseId),
@@ -172,7 +213,8 @@ function normalizePaper(value: unknown, questionIds: Set<string>): ExamPaper | n
     name,
     description: normalizeString(candidate.description),
     durationMinutes: normalizeDuration(candidate.durationMinutes),
-    questionIds: Array.from(new Set(ids)),
+    questionIds: normalizedQuestionIds,
+    sections,
     createdAt,
     updatedAt
   };
@@ -270,8 +312,26 @@ export function createQuestionDraft(scope: ExamCourseScope = createExamCourseSco
   };
 }
 
+export function createPaperSectionDraft(title = DEFAULT_PAPER_SECTION_TITLE, description = ""): ExamPaperSection {
+  return {
+    id: createId("section"),
+    title,
+    description,
+    questionIds: []
+  };
+}
+
+export function createPostgraduatePoliticsPaperSections() {
+  return [
+    createPaperSectionDraft("一、单项选择题", "1-16 小题，每小题 1 分，共 16 分"),
+    createPaperSectionDraft("二、多项选择题", "17-33 小题，每小题 2 分，共 34 分"),
+    createPaperSectionDraft("三、分析题", "34-38 小题，共 50 分")
+  ];
+}
+
 export function createPaperDraft(scope: ExamCourseScope = createExamCourseScope(null, "")): ExamPaper {
   const timestamp = nowIso();
+  const sections = [createPaperSectionDraft()];
   return {
     id: createId("paper"),
     courseId: scope.courseId,
@@ -280,6 +340,7 @@ export function createPaperDraft(scope: ExamCourseScope = createExamCourseScope(
     description: "",
     durationMinutes: DEFAULT_DURATION_MINUTES,
     questionIds: [],
+    sections,
     createdAt: timestamp,
     updatedAt: timestamp
   };
@@ -305,6 +366,10 @@ export function deleteQuestion(store: ExamStore, questionId: string): ExamStore 
     papers: store.papers.map((paper) => ({
       ...paper,
       questionIds: paper.questionIds.filter((id) => id !== questionId),
+      sections: paper.sections.map((section) => ({
+        ...section,
+        questionIds: section.questionIds.filter((id) => id !== questionId)
+      })),
       updatedAt: paper.questionIds.includes(questionId) ? nowIso() : paper.updatedAt
     })),
     attempts: store.attempts.map((attempt) => ({
@@ -414,7 +479,7 @@ export function appendAttempt(store: ExamStore, attempt: ExamAttempt): ExamStore
 
 export function getQuestionsForPaper(store: ExamStore, paper: ExamPaper) {
   const questionMap = new Map(store.questions.map((question) => [question.id, question]));
-  return paper.questionIds.map((id) => questionMap.get(id)).filter((question): question is ExamQuestion => Boolean(question));
+  return getPaperQuestionIds(paper).map((id) => questionMap.get(id)).filter((question): question is ExamQuestion => Boolean(question));
 }
 
 export function getScopedExamStore(store: ExamStore, scope: ExamCourseScope): ExamStore {
@@ -422,7 +487,14 @@ export function getScopedExamStore(store: ExamStore, scope: ExamCourseScope): Ex
   const questionIds = new Set(questions.map((question) => question.id));
   const papers = store.papers
     .filter((paper) => isSameExamCourse(paper.courseId, scope.courseId))
-    .map((paper) => ({ ...paper, questionIds: paper.questionIds.filter((questionId) => questionIds.has(questionId)) }));
+    .map((paper) => ({
+      ...paper,
+      questionIds: getPaperQuestionIds(paper).filter((questionId) => questionIds.has(questionId)),
+      sections: paper.sections.map((section) => ({
+        ...section,
+        questionIds: section.questionIds.filter((questionId) => questionIds.has(questionId))
+      }))
+    }));
   const paperIds = new Set(papers.map((paper) => paper.id));
   const attempts = store.attempts.filter((attempt) => isSameExamCourse(attempt.courseId, scope.courseId) && paperIds.has(attempt.paperId));
   return {

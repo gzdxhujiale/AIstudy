@@ -30,11 +30,14 @@ import {
   createExamCourseScope,
   createEmptyExamStore,
   createPaperDraft,
+  createPaperSectionDraft,
+  createPostgraduatePoliticsPaperSections,
   createQuestionDraft,
   deletePaper,
   deleteQuestion,
   EXAM_QUESTION_TYPE_LABELS,
   formatDuration,
+  getPaperQuestionIds,
   getQuestionsForPaper,
   getScopedExamStore,
   loadExamStore,
@@ -42,7 +45,7 @@ import {
   upsertPaper,
   upsertQuestion
 } from "./examService";
-import type { ExamAnswerMap, ExamAttempt, ExamOption, ExamPaper, ExamQuestion, ExamQuestionType, ExamStore } from "./examTypes";
+import type { ExamAnswerMap, ExamAttempt, ExamOption, ExamPaper, ExamPaperSection, ExamQuestion, ExamQuestionType, ExamStore } from "./examTypes";
 
 type ExamTab = "questions" | "papers" | "take" | "records";
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -58,9 +61,17 @@ type ExamWorkspaceProps = {
 type ExamSession = {
   paper: ExamPaper;
   questions: ExamQuestion[];
+  sections: ExamPaperSessionSection[];
   studentName: string;
   startedAt: string;
   answers: ExamAnswerMap;
+};
+
+type ExamPaperSessionSection = {
+  id: string;
+  title: string;
+  description: string;
+  questions: ExamQuestion[];
 };
 
 const EXAM_TABS: Array<{ id: ExamTab; label: string; icon: React.ReactNode }> = [
@@ -82,7 +93,11 @@ function cloneQuestion(question: ExamQuestion): ExamQuestion {
 function clonePaper(paper: ExamPaper): ExamPaper {
   return {
     ...paper,
-    questionIds: [...paper.questionIds]
+    questionIds: [...paper.questionIds],
+    sections: getPaperSections(paper).map((section) => ({
+      ...section,
+      questionIds: [...section.questionIds]
+    }))
   };
 }
 
@@ -111,6 +126,48 @@ function getPaperQuestionSummary(paper: ExamPaper, store: ExamStore) {
 
 function getQuestionById(store: ExamStore, questionId: string) {
   return store.questions.find((question) => question.id === questionId) ?? null;
+}
+
+function getPaperSections(paper: ExamPaper): ExamPaperSection[] {
+  return paper.sections.length
+    ? paper.sections
+    : [{
+        id: "legacy-section",
+        title: "试卷题目",
+        description: "",
+        questionIds: paper.questionIds
+      }];
+}
+
+function getPaperSectionsWithQuestions(paper: ExamPaper, store: ExamStore): ExamPaperSessionSection[] {
+  return getPaperSections(paper)
+    .map((section) => ({
+      id: section.id,
+      title: section.title,
+      description: section.description,
+      questions: section.questionIds.map((id) => getQuestionById(store, id)).filter((question): question is ExamQuestion => Boolean(question))
+    }))
+    .filter((section) => section.questions.length || section.title.trim());
+}
+
+function getSectionQuestionSummary(section: ExamPaperSection, store: ExamStore) {
+  const questions = section.questionIds.map((id) => getQuestionById(store, id)).filter((question): question is ExamQuestion => Boolean(question));
+  return {
+    count: questions.length,
+    totalScore: questions.reduce((sum, question) => sum + question.score, 0)
+  };
+}
+
+function flattenSectionQuestionIds(sections: ExamPaperSection[]) {
+  return Array.from(new Set(sections.flatMap((section) => section.questionIds)));
+}
+
+function applyPaperSections(paper: ExamPaper, sections: ExamPaperSection[]): ExamPaper {
+  return {
+    ...paper,
+    sections,
+    questionIds: flattenSectionQuestionIds(sections)
+  };
 }
 
 function normalizeKeywordDraft(value: string) {
@@ -164,6 +221,8 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
   const [questionCategory, setQuestionCategory] = React.useState("全部");
   const [paperDraft, setPaperDraft] = React.useState<ExamPaper>(() => createPaperDraft(scope));
   const [paperQuestionSearch, setPaperQuestionSearch] = React.useState("");
+  const [selectedPaperSectionId, setSelectedPaperSectionId] = React.useState("");
+  const [pendingPaperSectionId, setPendingPaperSectionId] = React.useState<string | null>(null);
   const [selectedPaperId, setSelectedPaperId] = React.useState("");
   const [studentName, setStudentName] = React.useState("");
   const [session, setSession] = React.useState<ExamSession | null>(null);
@@ -243,6 +302,13 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
     window.requestAnimationFrame(() => questionStemInputRef.current?.focus());
   }, [questionDraft?.id]);
 
+  React.useEffect(() => {
+    const sections = getPaperSections(paperDraft);
+    if (!sections.length) return;
+    if (selectedPaperSectionId && sections.some((section) => section.id === selectedPaperSectionId)) return;
+    setSelectedPaperSectionId(sections[0].id);
+  }, [paperDraft, selectedPaperSectionId]);
+
   const categories = React.useMemo(() => getAvailableCategories(scopedStore.questions), [scopedStore.questions]);
   const filteredQuestions = React.useMemo(() => {
     const keyword = questionSearch.trim().toLowerCase();
@@ -255,12 +321,13 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
 
   const availablePaperQuestions = React.useMemo(() => {
     const keyword = paperQuestionSearch.trim().toLowerCase();
+    const paperQuestionIds = new Set(getPaperQuestionIds(paperDraft));
     return scopedStore.questions.filter((question) => {
-      if (paperDraft.questionIds.includes(question.id)) return false;
+      if (paperQuestionIds.has(question.id)) return false;
       if (!keyword) return true;
       return `${question.stem} ${question.category}`.toLowerCase().includes(keyword);
     });
-  }, [paperDraft.questionIds, paperQuestionSearch, scopedStore.questions]);
+  }, [paperDraft, paperQuestionSearch, scopedStore.questions]);
 
   const selectedPaper = React.useMemo(
     () => scopedStore.papers.find((paper) => paper.id === selectedPaperId) ?? null,
@@ -270,18 +337,30 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
     () => (selectedPaper ? getQuestionsForPaper(scopedStore, selectedPaper) : []),
     [scopedStore, selectedPaper]
   );
+  const selectedPaperSections = React.useMemo(
+    () => (selectedPaper ? getPaperSectionsWithQuestions(selectedPaper, scopedStore) : []),
+    [scopedStore, selectedPaper]
+  );
   const selectedAttempt = React.useMemo(
     () => scopedStore.attempts.find((attempt) => attempt.id === selectedAttemptId) ?? scopedStore.attempts[0] ?? null,
     [scopedStore.attempts, selectedAttemptId]
   );
 
   function openQuestionEditor(question?: ExamQuestion) {
+    setPendingPaperSectionId(null);
     setQuestionDraft(question ? cloneQuestion(question) : createQuestionDraft(scope));
+    setNotice("");
+  }
+
+  function openPaperQuestionEditor(sectionId: string) {
+    setPendingPaperSectionId(sectionId);
+    setQuestionDraft(createQuestionDraft(scope));
     setNotice("");
   }
 
   function closeQuestionEditor() {
     setQuestionDraft(null);
+    setPendingPaperSectionId(null);
   }
 
   function changeQuestionType(type: ExamQuestionType) {
@@ -303,7 +382,7 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
       setNotice(validation);
       return;
     }
-    const nextStore = upsertQuestion(store, {
+    const nextQuestion = {
       ...questionDraft,
       courseId: scope.courseId,
       courseName: scope.courseName,
@@ -311,16 +390,43 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
       options: questionDraft.options.map((option) => ({ ...option, text: option.text.trim() })),
       answer: questionDraft.answer.map((answer) => answer.trim()).filter(Boolean),
       keywords: questionDraft.keywords.map((keyword) => keyword.trim()).filter(Boolean)
-    });
-    commitStore(nextStore, "题目已保存");
+    };
+    let nextStore = upsertQuestion(store, nextQuestion);
+    let nextNotice = "题目已保存";
+    if (pendingPaperSectionId) {
+      const nextSections = getPaperSections(paperDraft).map((section) => section.id === pendingPaperSectionId
+        ? { ...section, questionIds: section.questionIds.includes(nextQuestion.id) ? section.questionIds : [...section.questionIds, nextQuestion.id] }
+        : section);
+      const nextDraft = applyPaperSections(paperDraft, nextSections);
+      setPaperDraft(nextDraft);
+      nextNotice = "题目已加入试卷";
+      if (nextDraft.name.trim()) {
+        const nextPaper = {
+          ...nextDraft,
+          courseId: scope.courseId,
+          courseName: scope.courseName,
+          name: nextDraft.name.trim(),
+          description: nextDraft.description.trim()
+        };
+        nextStore = upsertPaper(nextStore, nextPaper);
+        setSelectedPaperId(nextPaper.id);
+        setPaperDraft(clonePaper(nextPaper));
+        nextNotice = "题目已加入试卷并保存";
+      }
+    }
+    commitStore(nextStore, nextNotice);
     setQuestionDraft(null);
+    setPendingPaperSectionId(null);
   }
 
   function removeQuestion(question: ExamQuestion) {
     if (!window.confirm(`删除题目「${question.stem.slice(0, 28)}」？`)) return;
     commitStore(deleteQuestion(store, question.id), "题目已删除");
     if (paperDraft.questionIds.includes(question.id)) {
-      setPaperDraft((current) => ({ ...current, questionIds: current.questionIds.filter((id) => id !== question.id) }));
+      setPaperDraft((current) => applyPaperSections(current, getPaperSections(current).map((section) => ({
+        ...section,
+        questionIds: section.questionIds.filter((id) => id !== question.id)
+      }))));
     }
   }
 
@@ -393,6 +499,7 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
     shouldFocusPaperNameRef.current = true;
     setPaperDraft(draft);
     setSelectedPaperId("");
+    setSelectedPaperSectionId(getPaperSections(draft)[0]?.id ?? "");
     setPaperQuestionSearch("");
     setNotice("已新建试卷，填写名称后保存");
   }
@@ -400,6 +507,7 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
   function editPaper(paper: ExamPaper) {
     setSelectedPaperId(paper.id);
     setPaperDraft(clonePaper(paper));
+    setSelectedPaperSectionId(getPaperSections(paper)[0]?.id ?? "");
     setNotice("");
   }
 
@@ -413,7 +521,9 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
       courseId: scope.courseId,
       courseName: scope.courseName,
       name: paperDraft.name.trim(),
-      description: paperDraft.description.trim()
+      description: paperDraft.description.trim(),
+      questionIds: getPaperQuestionIds(paperDraft),
+      sections: getPaperSections(paperDraft)
     };
     const nextStore = upsertPaper(store, nextPaper);
     commitStore(nextStore, "试卷已保存");
@@ -430,14 +540,55 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
     setPaperDraft(nextPaper ? clonePaper(nextPaper) : createPaperDraft(scope));
   }
 
-  function addQuestionToPaper(questionId: string) {
+  function updatePaperSection(sectionId: string, patch: Partial<Pick<ExamPaperSection, "title" | "description">>) {
+    setPaperDraft((current) => applyPaperSections(current, getPaperSections(current).map((section) => (
+      section.id === sectionId ? { ...section, ...patch } : section
+    ))));
+  }
+
+  function addPaperSection() {
+    const section = createPaperSectionDraft(`第 ${getPaperSections(paperDraft).length + 1} 部分`);
+    setPaperDraft((current) => applyPaperSections(current, [...getPaperSections(current), section]));
+    setSelectedPaperSectionId(section.id);
+    setNotice("已新增试卷分区");
+  }
+
+  function removePaperSection(sectionId: string) {
+    const sections = getPaperSections(paperDraft);
+    if (sections.length <= 1) {
+      setNotice("至少保留一个分区");
+      return;
+    }
+    const nextSections = sections.filter((section) => section.id !== sectionId);
+    setPaperDraft((current) => applyPaperSections(current, nextSections));
+    setSelectedPaperSectionId(nextSections[0]?.id ?? "");
+    setNotice("已移除试卷分区");
+  }
+
+  function applyPoliticsPaperTemplate() {
+    const hasQuestions = getPaperQuestionIds(paperDraft).length > 0;
+    if (hasQuestions && !window.confirm("套用结构会清空当前试卷分区内的题目，确认继续？")) return;
+    const sections = createPostgraduatePoliticsPaperSections();
+    setPaperDraft((current) => applyPaperSections(current, sections));
+    setSelectedPaperSectionId(sections[0]?.id ?? "");
+    setNotice("已套用考研政治真题结构");
+  }
+
+  function addQuestionToPaper(questionId: string, sectionId = selectedPaperSectionId) {
     const question = getQuestionById(scopedStore, questionId);
     if (!question) return;
-    if (paperDraft.questionIds.includes(questionId)) {
+    if (!sectionId) {
+      setNotice("请选择试卷分区");
+      return;
+    }
+    if (getPaperQuestionIds(paperDraft).includes(questionId)) {
       setNotice("题目已在试卷中");
       return;
     }
-    const nextDraft = { ...paperDraft, questionIds: [...paperDraft.questionIds, questionId] };
+    const nextSections = getPaperSections(paperDraft).map((section) => section.id === sectionId
+      ? { ...section, questionIds: [...section.questionIds, questionId] }
+      : section);
+    const nextDraft = applyPaperSections(paperDraft, nextSections);
     setPaperDraft(nextDraft);
     if (nextDraft.name.trim()) {
       const nextPaper = {
@@ -456,8 +607,13 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
     }
   }
 
-  function removeQuestionFromPaper(questionId: string) {
-    const nextDraft = { ...paperDraft, questionIds: paperDraft.questionIds.filter((id) => id !== questionId) };
+  function removeQuestionFromPaper(questionId: string, sectionId?: string) {
+    const nextSections = getPaperSections(paperDraft).map((section) => (
+      !sectionId || section.id === sectionId
+        ? { ...section, questionIds: section.questionIds.filter((id) => id !== questionId) }
+        : section
+    ));
+    const nextDraft = applyPaperSections(paperDraft, nextSections);
     setPaperDraft(nextDraft);
     if (nextDraft.name.trim()) {
       const nextPaper = {
@@ -491,6 +647,7 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
     setSession({
       paper: selectedPaper,
       questions: selectedPaperQuestions,
+      sections: selectedPaperSections,
       studentName: studentName.trim(),
       startedAt: new Date().toISOString(),
       answers: {}
@@ -598,6 +755,14 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
             onPaperDraftChange={setPaperDraft}
             onPaperSearchChange={setPaperQuestionSearch}
             paperNameInputRef={paperNameInputRef}
+            selectedSectionId={selectedPaperSectionId}
+            onSectionSelect={setSelectedPaperSectionId}
+            onSectionChange={updatePaperSection}
+            onAddSection={addPaperSection}
+            onRemoveSection={removePaperSection}
+            onApplyPoliticsTemplate={applyPoliticsPaperTemplate}
+            onCreateQuestionInSection={openPaperQuestionEditor}
+            onEditQuestion={openQuestionEditor}
             onNewPaper={startNewPaper}
             onEditPaper={editPaper}
             onDeletePaper={removePaper}
@@ -612,6 +777,7 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
             studentName={studentName}
             selectedPaper={selectedPaper}
             selectedPaperQuestions={selectedPaperQuestions}
+            selectedPaperSections={selectedPaperSections}
             session={session}
             lastAttempt={scopedStore.attempts.find((attempt) => attempt.id === lastAttemptId) ?? null}
             onPaperChange={setSelectedPaperId}
@@ -859,6 +1025,14 @@ function PaperBuilderView({
   onPaperDraftChange,
   onPaperSearchChange,
   paperNameInputRef,
+  selectedSectionId,
+  onSectionSelect,
+  onSectionChange,
+  onAddSection,
+  onRemoveSection,
+  onApplyPoliticsTemplate,
+  onCreateQuestionInSection,
+  onEditQuestion,
   onNewPaper,
   onEditPaper,
   onDeletePaper,
@@ -873,14 +1047,24 @@ function PaperBuilderView({
   onPaperDraftChange: (paper: ExamPaper) => void;
   onPaperSearchChange: (value: string) => void;
   paperNameInputRef: React.RefObject<HTMLInputElement | null>;
+  selectedSectionId: string;
+  onSectionSelect: (sectionId: string) => void;
+  onSectionChange: (sectionId: string, patch: Partial<Pick<ExamPaperSection, "title" | "description">>) => void;
+  onAddSection: () => void;
+  onRemoveSection: (sectionId: string) => void;
+  onApplyPoliticsTemplate: () => void;
+  onCreateQuestionInSection: (sectionId: string) => void;
+  onEditQuestion: (question: ExamQuestion) => void;
   onNewPaper: () => void;
   onEditPaper: (paper: ExamPaper) => void;
   onDeletePaper: (paper: ExamPaper) => void;
   onSavePaper: () => void;
-  onAddQuestion: (questionId: string) => void;
-  onRemoveQuestion: (questionId: string) => void;
+  onAddQuestion: (questionId: string, sectionId?: string) => void;
+  onRemoveQuestion: (questionId: string, sectionId?: string) => void;
 }) {
-  const selectedQuestions = paperDraft.questionIds.map((id) => getQuestionById(store, id)).filter((question): question is ExamQuestion => Boolean(question));
+  const sections = getPaperSections(paperDraft);
+  const selectedSection = sections.find((section) => section.id === selectedSectionId) ?? sections[0] ?? null;
+  const selectedQuestions = getPaperQuestionIds(paperDraft).map((id) => getQuestionById(store, id)).filter((question): question is ExamQuestion => Boolean(question));
   const draftTotalScore = selectedQuestions.reduce((sum, question) => sum + question.score, 0);
   return (
     <section className="exam-paper-layout">
@@ -931,36 +1115,99 @@ function PaperBuilderView({
         <div className="exam-paper-columns">
           <section>
             <div className="exam-mini-heading">
-              <h3>试卷题目</h3>
-              <span>{selectedQuestions.length} 题 · {draftTotalScore} 分</span>
+              <h3>整套试卷</h3>
+              <div className="exam-mini-actions">
+                <span>{selectedQuestions.length} 题 · {draftTotalScore} 分</span>
+                <button type="button" className="exam-secondary-button compact" onClick={onApplyPoliticsTemplate}>政治真题结构</button>
+                <button type="button" className="exam-secondary-button compact" onClick={onAddSection}>
+                  <Plus size={14} />
+                  <span>分区</span>
+                </button>
+              </div>
             </div>
-            <div className="exam-question-stack">
-              {selectedQuestions.length ? selectedQuestions.map((question, index) => (
-                <article key={question.id} className="exam-question-chip">
-                  <span>{index + 1}</span>
-                  <strong>{question.stem}</strong>
-                  <button type="button" aria-label="移除" onClick={() => onRemoveQuestion(question.id)}>
-                    <X size={14} />
-                  </button>
-                </article>
-              )) : <div className="exam-empty">暂无题目</div>}
+            <div className="exam-paper-section-stack">
+              {sections.map((section, sectionIndex) => {
+                const sectionQuestions = section.questionIds.map((id) => getQuestionById(store, id)).filter((question): question is ExamQuestion => Boolean(question));
+                const summary = getSectionQuestionSummary(section, store);
+                return (
+                  <article
+                    key={section.id}
+                    className={section.id === selectedSection?.id ? "exam-paper-section active" : "exam-paper-section"}
+                    onClick={() => onSectionSelect(section.id)}
+                  >
+                    <header className="exam-paper-section-head">
+                      <div className="exam-paper-section-fields">
+                        <input
+                          value={section.title}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => onSectionChange(section.id, { title: event.target.value })}
+                        />
+                        <input
+                          value={section.description}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => onSectionChange(section.id, { description: event.target.value })}
+                        />
+                      </div>
+                      <div className="exam-paper-section-actions">
+                        <span>{summary.count} 题 · {summary.totalScore} 分</span>
+                        <button type="button" aria-label="新增题目" onClick={(event) => {
+                          event.stopPropagation();
+                          onCreateQuestionInSection(section.id);
+                        }}>
+                          <Plus size={14} />
+                        </button>
+                        <button type="button" aria-label="删除分区" disabled={sections.length <= 1} onClick={(event) => {
+                          event.stopPropagation();
+                          onRemoveSection(section.id);
+                        }}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </header>
+                    <div className="exam-question-stack compact">
+                      {sectionQuestions.length ? sectionQuestions.map((question, questionIndex) => (
+                        <article key={question.id} className="exam-question-chip in-paper">
+                          <span>{sectionIndex + 1}-{questionIndex + 1}</span>
+                          <strong>{question.stem}</strong>
+                          <em>{question.score} 分</em>
+                          <button type="button" aria-label="编辑" onClick={(event) => {
+                            event.stopPropagation();
+                            onEditQuestion(question);
+                          }}>
+                            <PenLine size={14} />
+                          </button>
+                          <button type="button" aria-label="移除" onClick={(event) => {
+                            event.stopPropagation();
+                            onRemoveQuestion(question.id, section.id);
+                          }}>
+                            <X size={14} />
+                          </button>
+                        </article>
+                      )) : <div className="exam-empty compact">暂无题目</div>}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </section>
 
           <section>
             <div className="exam-mini-heading">
               <h3>题库</h3>
-              <label>
-                <Search size={14} />
-                <input value={paperQuestionSearch} onChange={(event) => onPaperSearchChange(event.target.value)} />
-              </label>
+              <div className="exam-mini-actions">
+                <span>{selectedSection?.title ?? "未选分区"}</span>
+                <label>
+                  <Search size={14} />
+                  <input value={paperQuestionSearch} onChange={(event) => onPaperSearchChange(event.target.value)} />
+                </label>
+              </div>
             </div>
             <div className="exam-question-stack">
               {availablePaperQuestions.length ? availablePaperQuestions.map((question) => (
                 <article key={question.id} className="exam-question-chip">
                   <span>{EXAM_QUESTION_TYPE_LABELS[question.type]}</span>
                   <strong>{question.stem}</strong>
-                  <button type="button" aria-label="添加" onClick={() => onAddQuestion(question.id)}>
+                  <button type="button" aria-label="添加" disabled={!selectedSection} onClick={() => onAddQuestion(question.id, selectedSection?.id)}>
                     <Plus size={14} />
                   </button>
                 </article>
@@ -979,6 +1226,7 @@ function TakeExamView({
   studentName,
   selectedPaper,
   selectedPaperQuestions,
+  selectedPaperSections,
   session,
   lastAttempt,
   onPaperChange,
@@ -993,6 +1241,7 @@ function TakeExamView({
   studentName: string;
   selectedPaper: ExamPaper | null;
   selectedPaperQuestions: ExamQuestion[];
+  selectedPaperSections: ExamPaperSessionSection[];
   session: ExamSession | null;
   lastAttempt: ExamAttempt | null;
   onPaperChange: (paperId: string) => void;
@@ -1018,6 +1267,12 @@ function TakeExamView({
 
   if (session) {
     const answeredCount = session.questions.filter((question) => (session.answers[question.id] ?? []).length).length;
+    const sessionSections = session.sections.length ? session.sections : [{
+      id: session.paper.id,
+      title: "试卷题目",
+      description: "",
+      questions: session.questions
+    }];
     return (
       <section className="exam-taking-layout">
         <header className="exam-taking-header">
@@ -1034,14 +1289,24 @@ function TakeExamView({
           </div>
         </header>
         <div className="exam-answer-list">
-          {session.questions.map((question, index) => (
-            <QuestionAnswerCard
-              key={question.id}
-              index={index}
-              question={question}
-              answer={session.answers[question.id] ?? []}
-              onAnswerChange={(value) => onAnswerChange(question, value)}
-            />
+          {sessionSections.map((section) => (
+            <section className="exam-answer-section" key={section.id}>
+              <header>
+                <h3>{section.title}</h3>
+                <span>{section.questions.length} 题</span>
+              </header>
+              {section.description ? <p>{section.description}</p> : null}
+              {section.questions.map((question, index) => (
+                <QuestionAnswerCard
+                  key={question.id}
+                  index={session.questions.findIndex((item) => item.id === question.id)}
+                  sectionIndex={index}
+                  question={question}
+                  answer={session.answers[question.id] ?? []}
+                  onAnswerChange={(value) => onAnswerChange(question, value)}
+                />
+              ))}
+            </section>
           ))}
         </div>
       </section>
@@ -1075,6 +1340,22 @@ function TakeExamView({
           <span>开始考试</span>
         </button>
       </div>
+      <div className="exam-paper-choice-list">
+        {store.papers.length ? store.papers.map((paper) => {
+          const paperSummary = getPaperQuestionSummary(paper, store);
+          return (
+            <button
+              key={paper.id}
+              type="button"
+              className={paper.id === selectedPaperId ? "active" : ""}
+              onClick={() => onPaperChange(paper.id)}
+            >
+              <strong>{paper.name}</strong>
+              <span>{paperSummary.count} 题 · {paperSummary.totalScore} 分 · {paper.durationMinutes} 分钟</span>
+            </button>
+          );
+        }) : <div className="exam-empty compact">暂无试卷</div>}
+      </div>
       {lastAttempt ? (
         <div className="exam-result-strip">
           <strong>{lastAttempt.paperName}</strong>
@@ -1082,12 +1363,21 @@ function TakeExamView({
         </div>
       ) : null}
       <div className="exam-preview-list">
-        {selectedPaperQuestions.length ? selectedPaperQuestions.map((question, index) => (
-          <article key={question.id}>
-            <span>{index + 1}</span>
-            <strong>{question.stem}</strong>
-            <em>{question.score} 分</em>
-          </article>
+        {selectedPaperQuestions.length ? selectedPaperSections.map((section) => (
+          <section className="exam-preview-section" key={section.id}>
+            <header>
+              <h3>{section.title}</h3>
+              <span>{section.questions.length} 题</span>
+            </header>
+            {section.description ? <p>{section.description}</p> : null}
+            {section.questions.map((question, index) => (
+              <article key={question.id}>
+                <span>{index + 1}</span>
+                <strong>{question.stem}</strong>
+                <em>{question.score} 分</em>
+              </article>
+            ))}
+          </section>
         )) : <div className="exam-empty">暂无试卷题目</div>}
       </div>
     </section>
@@ -1096,11 +1386,13 @@ function TakeExamView({
 
 function QuestionAnswerCard({
   index,
+  sectionIndex,
   question,
   answer,
   onAnswerChange
 }: {
   index: number;
+  sectionIndex: number;
   question: ExamQuestion;
   answer: string[];
   onAnswerChange: (value: string) => void;
@@ -1108,7 +1400,7 @@ function QuestionAnswerCard({
   return (
     <article className="exam-answer-card">
       <header>
-        <span>第 {index + 1} 题</span>
+        <span>第 {index + 1} 题 · 本题 {sectionIndex + 1}</span>
         <em>{EXAM_QUESTION_TYPE_LABELS[question.type]} · {question.score} 分</em>
       </header>
       <p>{question.stem}</p>

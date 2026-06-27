@@ -21,6 +21,13 @@ export type ExamQuestion = {
   updatedAt: string;
 };
 
+export type ExamPaperSection = {
+  id: string;
+  title: string;
+  description: string;
+  questionIds: string[];
+};
+
 export type ExamPaper = {
   id: string;
   courseId: string | null;
@@ -29,6 +36,7 @@ export type ExamPaper = {
   description: string;
   durationMinutes: number;
   questionIds: string[];
+  sections: ExamPaperSection[];
   createdAt: string;
   updatedAt: string;
 };
