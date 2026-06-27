@@ -1,4 +1,4 @@
-export type LocalSnapshotKind = "mindmap" | "document";
+export type LocalSnapshotKind = "mindmap" | "document" | "exam";
 
 type LocalSnapshotRecord<T> = {
   key: string;

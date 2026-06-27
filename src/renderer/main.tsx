@@ -30,6 +30,7 @@ import { InformationCollectionPanel } from "./features/collection/InformationCol
 import { CourseSidebar } from "./features/course/CourseSidebar";
 import { courseApi } from "./features/course/courseService";
 import type { Course, CourseSection, CourseStore, CourseSyncStatus } from "./features/course/courseTypes";
+import { ExamWorkspace } from "./features/exam/ExamWorkspace";
 import { McpControlPanel } from "./features/mcp/McpControlPanel";
 import { MindMapCatalog } from "./features/mindmap/MindMapCatalog";
 import {
@@ -1370,7 +1371,7 @@ function App() {
       ) : activeSection === "collection" ? (
         <InformationCollectionPanel courses={courses} activeCourseId={activeCourseId} />
       ) : activeSection === "exam" ? (
-        <main className="exam-page" aria-label="考试" />
+        <ExamWorkspace />
       ) : (
         <ChromePortManager />
       )}
