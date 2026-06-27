@@ -157,6 +157,12 @@ knowledge_asset_links
   relation_type
   created_at
   deleted_at
+
+exam_questions
+exam_papers
+exam_paper_sections
+exam_paper_questions
+exam_attempts
 ```
 
 ## Snapshot Policy

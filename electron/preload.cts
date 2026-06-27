@@ -72,6 +72,11 @@ contextBridge.exposeInMainWorld("aistudyKnowledgeDocuments", {
   exportDocx: (request: unknown) => invokeApp("knowledge-documents:export-docx", request)
 });
 
+contextBridge.exposeInMainWorld("aistudyExams", {
+  load: () => invokeApp("exams:load"),
+  save: (store: unknown) => invokeApp("exams:save", store)
+});
+
 contextBridge.exposeInMainWorld("aistudyMcp", {
   state: () => invokeApp("mcp:state"),
   setEnabled: (input: unknown) => invokeApp("mcp:set-enabled", input),

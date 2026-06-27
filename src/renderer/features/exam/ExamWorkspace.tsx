@@ -31,7 +31,6 @@ import {
   createEmptyExamStore,
   createPaperDraft,
   createPaperSectionDraft,
-  createPostgraduatePoliticsPaperSections,
   createQuestionDraft,
   deletePaper,
   deleteQuestion,
@@ -46,6 +45,7 @@ import {
   upsertQuestion
 } from "./examService";
 import type { ExamAnswerMap, ExamAttempt, ExamOption, ExamPaper, ExamPaperSection, ExamQuestion, ExamQuestionType, ExamStore } from "./examTypes";
+import { createPolitics2026Seed } from "./politics2026Seed";
 
 type ExamTab = "questions" | "papers" | "take" | "records";
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -564,12 +564,15 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
   }
 
   function applyPoliticsPaperTemplate() {
-    const hasQuestions = getPaperQuestionIds(paperDraft).length > 0;
-    if (hasQuestions && !window.confirm("套用结构会清空当前试卷分区内的题目，确认继续？")) return;
-    const sections = createPostgraduatePoliticsPaperSections();
-    setPaperDraft((current) => applyPaperSections(current, sections));
-    setSelectedPaperSectionId(sections[0]?.id ?? "");
-    setNotice("已套用考研政治真题结构");
+    const seed = createPolitics2026Seed(scope);
+    const nextStore = upsertPaper(
+      seed.questions.reduce((next, question) => upsertQuestion(next, question), store),
+      seed.paper
+    );
+    commitStore(nextStore, "已写入2026年考研政治真题");
+    setSelectedPaperId(seed.paper.id);
+    setPaperDraft(clonePaper(seed.paper));
+    setSelectedPaperSectionId(seed.paper.sections[0]?.id ?? "");
   }
 
   function addQuestionToPaper(questionId: string, sectionId = selectedPaperSectionId) {
@@ -1108,7 +1111,7 @@ function PaperBuilderView({
               <h3>整套试卷</h3>
               <div className="exam-mini-actions">
                 <span>{selectedQuestions.length} 题 · {draftTotalScore} 分</span>
-                <button type="button" className="exam-secondary-button compact" onClick={onApplyPoliticsTemplate}>政治真题结构</button>
+                <button type="button" className="exam-secondary-button compact" onClick={onApplyPoliticsTemplate}>政治真题</button>
                 <button type="button" className="exam-secondary-button compact" onClick={onAddSection}>
                   <Plus size={14} />
                   <span>分区</span>

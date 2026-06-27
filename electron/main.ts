@@ -12,6 +12,7 @@ import WebSocket from "ws";
 import { AISTUDY_CORE_CONTRACT } from "./coreContract.js";
 import { classifyAppError, createAppError, getAppErrorDefinition } from "./appErrors.js";
 import { exportKnowledgeDocumentDocx } from "./documentExport.js";
+import { ensureExamTables, readExamStoreFromMysql, writeExamStoreToMysql, type ExamMysqlRuntime } from "./examStore.js";
 import { createMcpController } from "./mcp/controller.js";
 import { createMcpRemoteAccessController } from "./mcp/remoteAccess.js";
 
@@ -283,6 +284,11 @@ type MysqlConfig = {
   knowledgeAssetLinkTable: string;
   chromePortStateTable: string;
   errorLogTable: string;
+  examQuestionTable: string;
+  examPaperTable: string;
+  examPaperSectionTable: string;
+  examPaperQuestionTable: string;
+  examAttemptTable: string;
 };
 
 type CourseRow = RowDataPacket & {
@@ -304,8 +310,7 @@ type CourseSectionRow = RowDataPacket & {
   updatedAt: Date | string;
 };
 
-type MysqlRuntime = {
-  pool: Pool;
+type MysqlRuntime = ExamMysqlRuntime & {
   courseTable: string;
   courseSectionTable: string;
   mindMapTable: string;
@@ -331,7 +336,12 @@ const PUBLIC_MYSQL_TABLES = {
   assets: "knowledge_assets",
   assetLinks: "knowledge_asset_links",
   chromePortStates: "chrome_port_states",
-  errorLogs: "app_error_logs"
+  errorLogs: "app_error_logs",
+  examQuestions: "exam_questions",
+  examPapers: "exam_papers",
+  examPaperSections: "exam_paper_sections",
+  examPaperQuestions: "exam_paper_questions",
+  examAttempts: "exam_attempts"
 } as const;
 
 type AppErrorLogRow = RowDataPacket & {
@@ -3946,7 +3956,12 @@ async function createCourseLocatorFile(input: CourseLocatorRequest) {
         mindMaps: mysqlConfig.mindMapTable,
         mindMapNodes: mysqlConfig.mindMapNodeTable,
         documents: mysqlConfig.knowledgeDocumentTable,
-        documentSnapshots: mysqlConfig.knowledgeDocumentSnapshotTable
+        documentSnapshots: mysqlConfig.knowledgeDocumentSnapshotTable,
+        examQuestions: mysqlConfig.examQuestionTable,
+        examPapers: mysqlConfig.examPaperTable,
+        examPaperSections: mysqlConfig.examPaperSectionTable,
+        examPaperQuestions: mysqlConfig.examPaperQuestionTable,
+        examAttempts: mysqlConfig.examAttemptTable
       }
     },
     course: {
@@ -3986,7 +4001,12 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
     assetTable: PUBLIC_MYSQL_TABLES.assets,
     knowledgeAssetLinkTable: PUBLIC_MYSQL_TABLES.assetLinks,
     chromePortStateTable: PUBLIC_MYSQL_TABLES.chromePortStates,
-    errorLogTable: PUBLIC_MYSQL_TABLES.errorLogs
+    errorLogTable: PUBLIC_MYSQL_TABLES.errorLogs,
+    examQuestionTable: PUBLIC_MYSQL_TABLES.examQuestions,
+    examPaperTable: PUBLIC_MYSQL_TABLES.examPapers,
+    examPaperSectionTable: PUBLIC_MYSQL_TABLES.examPaperSections,
+    examPaperQuestionTable: PUBLIC_MYSQL_TABLES.examPaperQuestions,
+    examAttemptTable: PUBLIC_MYSQL_TABLES.examAttempts
   };
 
   validateMysqlIdentifier(config.database, "MySQL database");
@@ -4001,6 +4021,11 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
   validateMysqlIdentifier(config.knowledgeAssetLinkTable, "MySQL knowledge asset link table");
   validateMysqlIdentifier(config.chromePortStateTable, "MySQL Chrome port state table");
   validateMysqlIdentifier(config.errorLogTable, "MySQL error log table");
+  validateMysqlIdentifier(config.examQuestionTable, "MySQL exam question table");
+  validateMysqlIdentifier(config.examPaperTable, "MySQL exam paper table");
+  validateMysqlIdentifier(config.examPaperSectionTable, "MySQL exam paper section table");
+  validateMysqlIdentifier(config.examPaperQuestionTable, "MySQL exam paper question table");
+  validateMysqlIdentifier(config.examAttemptTable, "MySQL exam attempt table");
   return config;
 }
 
@@ -4550,6 +4575,11 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
   const knowledgeAssetLinkTable = escapeMysqlIdentifier(config.knowledgeAssetLinkTable, "MySQL knowledge asset link table");
   const chromePortStateTable = escapeMysqlIdentifier(config.chromePortStateTable, "MySQL Chrome port state table");
   const errorLogTable = escapeMysqlIdentifier(config.errorLogTable, "MySQL error log table");
+  const examQuestionTable = escapeMysqlIdentifier(config.examQuestionTable, "MySQL exam question table");
+  const examPaperTable = escapeMysqlIdentifier(config.examPaperTable, "MySQL exam paper table");
+  const examPaperSectionTable = escapeMysqlIdentifier(config.examPaperSectionTable, "MySQL exam paper section table");
+  const examPaperQuestionTable = escapeMysqlIdentifier(config.examPaperQuestionTable, "MySQL exam paper question table");
+  const examAttemptTable = escapeMysqlIdentifier(config.examAttemptTable, "MySQL exam attempt table");
   await ensureCourseTable(pool, courseTable);
   await migrateCourseTable(pool, courseTable);
   await ensureCourseSectionTable(pool, courseSectionTable);
@@ -4559,6 +4589,7 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
   await ensureKnowledgeAssetTables(pool, assetTable, knowledgeAssetLinkTable);
   await ensureChromePortStateTable(pool, chromePortStateTable);
   await ensureErrorLogTable(pool, errorLogTable);
+  await ensureExamTables(pool, examQuestionTable, examPaperTable, examPaperSectionTable, examPaperQuestionTable, examAttemptTable);
 
   mysqlRuntime = {
     pool,
@@ -4572,7 +4603,12 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
     assetTable,
     knowledgeAssetLinkTable,
     chromePortStateTable,
-    errorLogTable
+    errorLogTable,
+    examQuestionTable,
+    examPaperTable,
+    examPaperSectionTable,
+    examPaperQuestionTable,
+    examAttemptTable
   };
   return mysqlRuntime;
 }
@@ -8670,6 +8706,16 @@ ipcMain.handle("knowledge-documents:save", withUserFacingError("knowledge-docume
 ipcMain.handle("knowledge-documents:export-docx", withUserFacingError("knowledge-documents:export-docx", "Word 文档导出没有完成，请稍后再试。", (event, request) => {
   const invokeEvent = event as IpcMainInvokeEvent;
   return exportKnowledgeDocumentDocx(BrowserWindow.fromWebContents(invokeEvent.sender), request);
+}));
+
+ipcMain.handle("exams:load", withUserFacingError("exams:load", "考试数据读取没有完成，请稍后再试。", async () => {
+  const runtime = await getMysqlRuntime();
+  return readExamStoreFromMysql(runtime);
+}));
+
+ipcMain.handle("exams:save", withUserFacingError("exams:save", "考试数据保存没有完成，请稍后再试。", async (_event, store) => {
+  const runtime = await getMysqlRuntime();
+  return writeExamStoreToMysql(runtime, store);
 }));
 
 ipcMain.handle("mcp:state", withUserFacingError("mcp:state", "MCP 状态暂时无法读取。", () => mcpController.getState()));

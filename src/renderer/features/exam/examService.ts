@@ -11,6 +11,15 @@ import type {
   ExamStore
 } from "./examTypes";
 
+declare global {
+  interface Window {
+    aistudyExams?: {
+      load: () => Promise<unknown>;
+      save: (store: unknown) => Promise<unknown>;
+    };
+  }
+}
+
 const EXAM_STORE_KEY = "exam:store";
 const STORE_VERSION = 1 as const;
 const DEFAULT_DURATION_MINUTES = 60;
@@ -285,13 +294,41 @@ export function normalizeExamStore(value: unknown): ExamStore {
   };
 }
 
+function examStoreHasContent(store: ExamStore) {
+  return store.questions.length > 0 || store.papers.length > 0 || store.attempts.length > 0;
+}
+
 export async function loadExamStore() {
   const snapshot = await readLocalSnapshot<ExamStore>(EXAM_STORE_KEY);
-  return normalizeExamStore(snapshot);
+  const localStore = normalizeExamStore(snapshot);
+  if (!window.aistudyExams) return localStore;
+
+  try {
+    const remoteStore = normalizeExamStore(await window.aistudyExams.load());
+    if (examStoreHasContent(remoteStore)) {
+      await writeLocalSnapshot(EXAM_STORE_KEY, "exam", remoteStore);
+      return remoteStore;
+    }
+    if (examStoreHasContent(localStore)) {
+      await window.aistudyExams.save(localStore);
+      return localStore;
+    }
+    return remoteStore;
+  } catch (error) {
+    console.warn("Exam MySQL store unavailable, using local snapshot.", error);
+    return localStore;
+  }
 }
 
 export async function saveExamStore(store: ExamStore) {
-  await writeLocalSnapshot(EXAM_STORE_KEY, "exam", normalizeExamStore(store));
+  const normalizedStore = normalizeExamStore(store);
+  await writeLocalSnapshot(EXAM_STORE_KEY, "exam", normalizedStore);
+  if (!window.aistudyExams) return;
+  try {
+    await window.aistudyExams.save(normalizedStore);
+  } catch (error) {
+    console.warn("Exam MySQL save unavailable, local snapshot kept.", error);
+  }
 }
 
 export function createQuestionDraft(scope: ExamCourseScope = createExamCourseScope(null, ""), type: ExamQuestionType = "single"): ExamQuestion {
@@ -320,14 +357,6 @@ export function createPaperSectionDraft(title = DEFAULT_PAPER_SECTION_TITLE, des
     description,
     questionIds: []
   };
-}
-
-export function createPostgraduatePoliticsPaperSections() {
-  return [
-    createPaperSectionDraft("一、单项选择题", "1-16 小题，每小题 1 分，共 16 分"),
-    createPaperSectionDraft("二、多项选择题", "17-33 小题，每小题 2 分，共 34 分"),
-    createPaperSectionDraft("三、分析题", "34-38 小题，共 50 分")
-  ];
 }
 
 export function createPaperDraft(scope: ExamCourseScope = createExamCourseScope(null, "")): ExamPaper {
