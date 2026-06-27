@@ -7,16 +7,14 @@ import {
   Document as DocxDocument,
   ExternalHyperlink,
   FileChild,
-  Footer,
-  Header,
   HeadingLevel,
   ImageRun,
   LevelFormat,
   Packer,
   PageBreak,
-  PageNumber,
   Paragraph,
   ShadingType,
+  Tab,
   Table,
   TableCell,
   TableLayoutType,
@@ -59,6 +57,18 @@ type DocxTextStyle = {
   superScript?: boolean;
 };
 
+type DocxParagraphStyle = {
+  rowFlex?: unknown;
+  listType?: string;
+  level?: unknown;
+  indent?: unknown;
+};
+
+type DocxParagraphBlock = {
+  runs: Array<{ text: string; style: DocxTextStyle }>;
+  style: DocxParagraphStyle;
+};
+
 const { dialog } = electron;
 type BrowserWindow = electron.BrowserWindow;
 
@@ -67,11 +77,10 @@ const DEFAULT_FONT = "Microsoft YaHei";
 const DOCX_PAGE_WIDTH = 11906;
 const DOCX_PAGE_HEIGHT = 16838;
 const DOCX_TEXT_COLOR = "1F2937";
-const DOCX_MUTED_COLOR = "64748B";
-const DOCX_PRIMARY_COLOR = "2563EB";
 const DOCX_TABLE_BORDER_COLOR = "CBD5E1";
 const DOCX_TWIP_PER_PT = 20;
 const DOCX_PX_TO_PT = 0.75;
+const DOCX_EDITOR_MARGIN_TWIP = 960;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -148,9 +157,6 @@ function detectHeadingLevel(text: string, element: Record<string, unknown>) {
   if (level === "second") return 2;
   if (level === "third") return 3;
   if (level === "fourth") return 4;
-  if (/^[一二三四五六七八九十]+[、.．]\s*/.test(text.trim())) return 1;
-  if (/^[（(][一二三四五六七八九十\d]+[）)]、?\s*/.test(text.trim())) return 2;
-  if (/^\d+[.．]\s*\S/.test(text.trim())) return 3;
   return 0;
 }
 
@@ -168,12 +174,8 @@ function readElementText(value: unknown): string {
   return text;
 }
 
-function collectTextRuns(element: unknown, inherited: DocxTextStyle = {}): Array<{ text: string; style: DocxTextStyle }> {
-  if (typeof element === "string") return [{ text: element, style: inherited }];
-  if (Array.isArray(element)) return element.flatMap((item) => collectTextRuns(item, inherited));
-  if (!isRecord(element)) return [];
-
-  const nextStyle: DocxTextStyle = {
+function readElementTextStyle(element: Record<string, unknown>, inherited: DocxTextStyle = {}): DocxTextStyle {
+  return {
     ...inherited,
     bold: typeof element.bold === "boolean" ? element.bold : inherited.bold,
     italics: typeof element.italic === "boolean" ? element.italic : inherited.italics,
@@ -187,18 +189,16 @@ function collectTextRuns(element: unknown, inherited: DocxTextStyle = {}): Array
     subScript: element.type === "subscript" ? true : inherited.subScript,
     superScript: element.type === "superscript" ? true : inherited.superScript
   };
+}
 
-  const runs: Array<{ text: string; style: DocxTextStyle }> = [];
-  if (typeof element.value === "string") {
-    runs.push({ text: element.value, style: nextStyle });
-  }
-  for (const [key, child] of Object.entries(element)) {
-    if (key === "value") continue;
-    if (["valueList", "listWrap", "children", "items", "paragraphs"].includes(key) || Array.isArray(child)) {
-      runs.push(...collectTextRuns(child, nextStyle));
-    }
-  }
-  return runs;
+function readElementParagraphStyle(element: Record<string, unknown>, inherited: DocxParagraphStyle = {}): DocxParagraphStyle {
+  return {
+    ...inherited,
+    rowFlex: element.rowFlex ?? inherited.rowFlex,
+    listType: typeof element.listType === "string" ? element.listType : inherited.listType,
+    level: element.level ?? inherited.level,
+    indent: element.indent ?? inherited.indent
+  };
 }
 
 function createTextRun(text: string, style: DocxTextStyle, headingLevel = 0) {
@@ -208,8 +208,24 @@ function createTextRun(text: string, style: DocxTextStyle, headingLevel = 0) {
     italics: style.italics,
     underline: style.underline ? { type: UnderlineType.SINGLE } : undefined,
     strike: style.strike,
-    color: headingLevel > 0 ? DOCX_PRIMARY_COLOR : style.color ?? DOCX_TEXT_COLOR,
-    size: headingLevel === 1 ? 32 : headingLevel === 2 ? 28 : headingLevel === 3 ? 24 : style.size ?? 24,
+    color: style.color ?? DOCX_TEXT_COLOR,
+    size: style.size ?? (headingLevel === 1 ? 32 : headingLevel === 2 ? 28 : headingLevel === 3 ? 24 : 24),
+    font: style.font || DEFAULT_FONT,
+    highlight: style.highlight,
+    subScript: style.subScript,
+    superScript: style.superScript
+  });
+}
+
+function createTabRun(style: DocxTextStyle, headingLevel = 0) {
+  return new TextRun({
+    children: [new Tab()],
+    bold: headingLevel > 0 ? true : style.bold,
+    italics: style.italics,
+    underline: style.underline ? { type: UnderlineType.SINGLE } : undefined,
+    strike: style.strike,
+    color: style.color ?? DOCX_TEXT_COLOR,
+    size: style.size ?? (headingLevel === 1 ? 32 : headingLevel === 2 ? 28 : headingLevel === 3 ? 24 : 24),
     font: style.font || DEFAULT_FONT,
     highlight: style.highlight,
     subScript: style.subScript,
@@ -220,11 +236,15 @@ function createTextRun(text: string, style: DocxTextStyle, headingLevel = 0) {
 function createRunChildren(runs: Array<{ text: string; style: DocxTextStyle }>, headingLevel = 0) {
   const children: Array<TextRun | ExternalHyperlink> = [];
   for (const run of runs.length > 0 ? runs : [{ text: "", style: {} }]) {
-    const parts = String(run.text ?? "").split(/(\n)/);
+    const parts = String(run.text ?? "").split(/(\t|\n)/);
     for (const part of parts) {
       if (part === "") continue;
       if (part === "\n") {
         children.push(new TextRun({ break: 1 }));
+        continue;
+      }
+      if (part === "\t") {
+        children.push(createTabRun(run.style, headingLevel));
         continue;
       }
       const textRun = createTextRun(part, run.style, headingLevel);
@@ -246,25 +266,73 @@ function getAlignment(rowFlex: unknown) {
 }
 
 function getParagraphSpacing(headingLevel: number) {
-  if (headingLevel === 1) return { before: 360, after: 180 };
-  if (headingLevel === 2) return { before: 280, after: 140 };
-  if (headingLevel === 3) return { before: 220, after: 120 };
-  return { before: 80, after: 120, line: 360 };
+  if (headingLevel === 1) return { before: 180, after: 80 };
+  if (headingLevel === 2) return { before: 140, after: 60 };
+  if (headingLevel === 3) return { before: 100, after: 40 };
+  return { before: 0, after: 0, line: 300 };
 }
 
-function createParagraphFromElement(element: unknown): Paragraph | null {
-  if (!isRecord(element)) return null;
-  const text = readElementText(element);
-  const runs = collectTextRuns(element);
-  const headingLevel = detectHeadingLevel(text, element);
-  const cleanedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!cleanedText.trim()) {
-    return new Paragraph({ spacing: { before: 40, after: 40 } });
+function appendTextToParagraphBlocks(
+  text: string,
+  style: DocxTextStyle,
+  paragraphStyle: DocxParagraphStyle,
+  blocks: DocxParagraphBlock[],
+  current: { block: DocxParagraphBlock }
+) {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const parts = normalized.split("\n");
+  parts.forEach((part, index) => {
+    if (index > 0) {
+      blocks.push(current.block);
+      current.block = { runs: [], style: paragraphStyle };
+    }
+    if (part) {
+      current.block.style = { ...current.block.style, ...paragraphStyle };
+      current.block.runs.push({ text: part, style });
+    }
+  });
+}
+
+function flattenElementToParagraphBlocks(
+  element: unknown,
+  blocks: DocxParagraphBlock[],
+  current: { block: DocxParagraphBlock },
+  inheritedTextStyle: DocxTextStyle = {},
+  inheritedParagraphStyle: DocxParagraphStyle = {}
+) {
+  if (typeof element === "string") {
+    appendTextToParagraphBlocks(element, inheritedTextStyle, inheritedParagraphStyle, blocks, current);
+    return;
+  }
+  if (Array.isArray(element)) {
+    element.forEach((item) => flattenElementToParagraphBlocks(item, blocks, current, inheritedTextStyle, inheritedParagraphStyle));
+    return;
+  }
+  if (!isRecord(element)) return;
+
+  const textStyle = readElementTextStyle(element, inheritedTextStyle);
+  const paragraphStyle = readElementParagraphStyle(element, inheritedParagraphStyle);
+  if (element.type === "tab") {
+    appendTextToParagraphBlocks("\t", textStyle, paragraphStyle, blocks, current);
+  } else if (typeof element.value === "string") {
+    appendTextToParagraphBlocks(element.value, textStyle, paragraphStyle, blocks, current);
   }
 
-  const listType = typeof element.listType === "string" ? element.listType : "";
-  const paragraphOptions = {
-    children: createRunChildren(runs, headingLevel),
+  for (const [key, child] of Object.entries(element)) {
+    if (key === "value") continue;
+    if (["valueList", "listWrap", "children", "items", "paragraphs"].includes(key) || Array.isArray(child)) {
+      flattenElementToParagraphBlocks(child, blocks, current, textStyle, paragraphStyle);
+    }
+  }
+}
+
+function createParagraphFromBlock(block: DocxParagraphBlock): Paragraph {
+  const text = block.runs.map((run) => run.text).join("");
+  const headingLevel = detectHeadingLevel(text, { level: block.style.level });
+  const hasText = text.trim().length > 0;
+  const listType = hasText && typeof block.style.listType === "string" ? block.style.listType : "";
+  return new Paragraph({
+    children: createRunChildren(block.runs, headingLevel),
     heading: headingLevel === 1
       ? HeadingLevel.HEADING_1
       : headingLevel === 2
@@ -272,17 +340,15 @@ function createParagraphFromElement(element: unknown): Paragraph | null {
         : headingLevel === 3
           ? HeadingLevel.HEADING_3
           : undefined,
-    alignment: getAlignment(element.rowFlex),
-    spacing: getParagraphSpacing(headingLevel),
-    indent: headingLevel > 0 ? undefined : { firstLine: listType ? undefined : 420 },
+    alignment: getAlignment(block.style.rowFlex),
+    spacing: hasText ? getParagraphSpacing(headingLevel) : { before: 0, after: 0 },
     numbering: listType === "ul"
       ? { reference: "aistudy-bullets", level: 0 }
       : listType === "ol"
         ? { reference: "aistudy-numbering", level: 0 }
         : undefined,
     keepNext: headingLevel > 0
-  };
-  return new Paragraph(paragraphOptions);
+  });
 }
 
 function getCellText(cell: unknown) {
@@ -354,12 +420,25 @@ function buildDocxChildren(snapshot: KnowledgeDocumentSnapshot): FileChild[] {
   const content = isRecord(snapshot.content) ? snapshot.content : {};
   const main = Array.isArray(content.main) ? content.main : [];
   const children: FileChild[] = [];
+  const blocks: DocxParagraphBlock[] = [];
+  const current = { block: { runs: [], style: {} } as DocxParagraphBlock };
+  const flushParagraphBlocks = () => {
+    if (current.block.runs.length > 0 || blocks.length > 0) {
+      blocks.push(current.block);
+      current.block = { runs: [], style: {} };
+      while (blocks.length > 0) {
+        children.push(createParagraphFromBlock(blocks.shift() as DocxParagraphBlock));
+      }
+    }
+  };
   for (const element of main) {
     if (isRecord(element) && element.type === "pageBreak") {
+      flushParagraphBlocks();
       children.push(new Paragraph({ children: [new PageBreak()] }));
       continue;
     }
     if (isRecord(element) && Array.isArray(element.trList)) {
+      flushParagraphBlocks();
       const table = createTableFromElement(element);
       if (table) children.push(table);
       continue;
@@ -367,41 +446,18 @@ function buildDocxChildren(snapshot: KnowledgeDocumentSnapshot): FileChild[] {
     if (isRecord(element)) {
       const image = createImageFromElement(element);
       if (image) {
+        flushParagraphBlocks();
         children.push(image);
         continue;
       }
     }
-    const paragraph = createParagraphFromElement(element);
-    if (paragraph) children.push(paragraph);
+    flattenElementToParagraphBlocks(element, blocks, current);
   }
+  flushParagraphBlocks();
   return children.length > 0 ? children : [new Paragraph({ text: "" })];
 }
 
 function createDocxDocument(title: string, snapshot: KnowledgeDocumentSnapshot) {
-  const header = new Header({
-    children: [
-      new Paragraph({
-        children: [
-          new TextRun({ text: title, bold: true, color: DOCX_MUTED_COLOR, size: 18, font: DEFAULT_FONT })
-        ],
-        alignment: AlignmentType.RIGHT,
-        spacing: { after: 80 }
-      })
-    ]
-  });
-  const footer = new Footer({
-    children: [
-      new Paragraph({
-        children: [
-          new TextRun({ text: "AIstudy", color: DOCX_MUTED_COLOR, size: 18, font: DEFAULT_FONT }),
-          new TextRun({ text: "  ·  第 ", color: DOCX_MUTED_COLOR, size: 18, font: DEFAULT_FONT }),
-          new TextRun({ children: [PageNumber.CURRENT], color: DOCX_MUTED_COLOR, size: 18, font: DEFAULT_FONT }),
-          new TextRun({ text: " 页", color: DOCX_MUTED_COLOR, size: 18, font: DEFAULT_FONT })
-        ],
-        alignment: AlignmentType.CENTER
-      })
-    ]
-  });
   return new DocxDocument({
     title,
     creator: "AIstudy",
@@ -410,19 +466,19 @@ function createDocxDocument(title: string, snapshot: KnowledgeDocumentSnapshot) 
       default: {
         document: {
           run: { font: DEFAULT_FONT, size: 24, color: DOCX_TEXT_COLOR },
-          paragraph: { spacing: { line: 360, after: 120 } }
+          paragraph: { spacing: { line: 300, after: 0 } }
         },
         heading1: {
-          run: { font: DEFAULT_FONT, size: 32, bold: true, color: DOCX_PRIMARY_COLOR },
-          paragraph: { spacing: { before: 360, after: 180 }, keepNext: true }
+          run: { font: DEFAULT_FONT, size: 32, bold: true, color: DOCX_TEXT_COLOR },
+          paragraph: { spacing: { before: 180, after: 80 }, keepNext: true }
         },
         heading2: {
-          run: { font: DEFAULT_FONT, size: 28, bold: true, color: DOCX_PRIMARY_COLOR },
-          paragraph: { spacing: { before: 280, after: 140 }, keepNext: true }
+          run: { font: DEFAULT_FONT, size: 28, bold: true, color: DOCX_TEXT_COLOR },
+          paragraph: { spacing: { before: 140, after: 60 }, keepNext: true }
         },
         heading3: {
           run: { font: DEFAULT_FONT, size: 24, bold: true, color: DOCX_TEXT_COLOR },
-          paragraph: { spacing: { before: 220, after: 120 }, keepNext: true }
+          paragraph: { spacing: { before: 100, after: 40 }, keepNext: true }
         }
       }
     },
@@ -440,22 +496,18 @@ function createDocxDocument(title: string, snapshot: KnowledgeDocumentSnapshot) 
     },
     sections: [
       {
-        headers: { default: header },
-        footers: { default: footer },
         properties: {
           page: {
             size: { width: DOCX_PAGE_WIDTH, height: DOCX_PAGE_HEIGHT },
-            margin: { top: 1440, right: 1260, bottom: 1260, left: 1260, header: 720, footer: 720 }
+            margin: {
+              top: DOCX_EDITOR_MARGIN_TWIP,
+              right: DOCX_EDITOR_MARGIN_TWIP,
+              bottom: DOCX_EDITOR_MARGIN_TWIP,
+              left: DOCX_EDITOR_MARGIN_TWIP
+            }
           }
         },
-        children: [
-          new Paragraph({
-            children: [new TextRun({ text: title, bold: true, color: DOCX_PRIMARY_COLOR, size: 36, font: DEFAULT_FONT })],
-            heading: HeadingLevel.TITLE,
-            spacing: { before: 120, after: 300 }
-          }),
-          ...buildDocxChildren(snapshot)
-        ]
+        children: buildDocxChildren(snapshot)
       }
     ]
   });
