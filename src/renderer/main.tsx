@@ -1371,7 +1371,13 @@ function App() {
       ) : activeSection === "collection" ? (
         <InformationCollectionPanel courses={courses} activeCourseId={activeCourseId} />
       ) : activeSection === "exam" ? (
-        <ExamWorkspace activeCourseId={activeCourseId} activeCourseName={activeCourse?.name ?? ""} />
+        <ExamWorkspace
+          activeCourseId={activeCourseId}
+          activeCourseName={activeCourse?.name ?? ""}
+          activeMindMapId={activeMindMapId}
+          selectedNodeId={selectedMindMapNode.id}
+          selectedNodeTitle={selectedMindMapNode.title}
+        />
       ) : (
         <ChromePortManager />
       )}

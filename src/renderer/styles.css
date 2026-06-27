@@ -354,6 +354,12 @@ select {
   gap: 10px;
 }
 
+.exam-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .exam-filter label,
 .exam-mini-heading label {
   display: inline-flex;
@@ -408,6 +414,16 @@ select {
   border-color: rgba(123, 145, 169, 0.18);
   color: var(--text-muted);
   background: #ffffff;
+}
+
+.exam-primary-button:disabled,
+.exam-secondary-button:disabled {
+  opacity: 0.46;
+  cursor: default;
+}
+
+.exam-hidden-file {
+  display: none;
 }
 
 .exam-table {

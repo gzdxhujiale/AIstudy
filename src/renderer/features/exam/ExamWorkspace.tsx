@@ -3,6 +3,8 @@ import {
   Check,
   CheckCircle2,
   ClipboardList,
+  Download,
+  FileInput,
   FileText,
   PenLine,
   Play,
@@ -11,8 +13,15 @@ import {
   Search,
   Trash2,
   Trophy,
+  Upload,
   X
 } from "lucide-react";
+import {
+  extractTextFromKnowledgeDocumentSnapshot,
+  parseQuestionsFromJsonText,
+  parseQuestionsFromText,
+  serializeQuestionsForExport
+} from "./examImportExport";
 import {
   appendAttempt,
   assignUnscopedExamItemsToCourse,
@@ -41,6 +50,9 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 type ExamWorkspaceProps = {
   activeCourseId: string | null;
   activeCourseName: string;
+  activeMindMapId: string | null;
+  selectedNodeId: string | null;
+  selectedNodeTitle: string;
 };
 
 type ExamSession = {
@@ -133,11 +145,12 @@ function getAvailableCategories(questions: ExamQuestion[]) {
   return Array.from(new Set(questions.map((question) => question.category).filter(Boolean))).sort((left, right) => left.localeCompare(right, "zh-CN"));
 }
 
-export function ExamWorkspace({ activeCourseId, activeCourseName }: ExamWorkspaceProps) {
+export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapId, selectedNodeId, selectedNodeTitle }: ExamWorkspaceProps) {
   const scope = React.useMemo(
     () => createExamCourseScope(activeCourseId, activeCourseName),
     [activeCourseId, activeCourseName]
   );
+  const jsonFileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [store, setStore] = React.useState<ExamStore>(() => createEmptyExamStore());
   const [isHydrated, setIsHydrated] = React.useState(false);
   const [saveState, setSaveState] = React.useState<SaveState>("idle");
@@ -287,6 +300,70 @@ export function ExamWorkspace({ activeCourseId, activeCourseName }: ExamWorkspac
     commitStore(deleteQuestion(store, question.id), "题目已删除");
     if (paperDraft.questionIds.includes(question.id)) {
       setPaperDraft((current) => ({ ...current, questionIds: current.questionIds.filter((id) => id !== question.id) }));
+    }
+  }
+
+  function addImportedQuestions(questions: ExamQuestion[], message: string) {
+    if (!questions.length) {
+      setNotice("没有识别到题目");
+      return;
+    }
+    const nextStore = questions.reduce((next, question) => upsertQuestion(next, {
+      ...question,
+      courseId: scope.courseId,
+      courseName: scope.courseName
+    }), store);
+    commitStore(nextStore, message);
+    setActiveTab("questions");
+  }
+
+  async function importJsonQuestions(file: File | null | undefined) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const questions = parseQuestionsFromJsonText(text, scope);
+      addImportedQuestions(questions, `已导入 ${questions.length} 道题`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "题库导入失败");
+    } finally {
+      if (jsonFileInputRef.current) jsonFileInputRef.current.value = "";
+    }
+  }
+
+  function exportCurrentQuestions() {
+    if (!scopedStore.questions.length) {
+      setNotice("当前课程暂无题目");
+      return;
+    }
+    const blob = new Blob([serializeQuestionsForExport(scopedStore.questions)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${scope.courseName || "考试"}-题库.json`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function importQuestionsFromCurrentDocument() {
+    if (!activeCourseId || !activeMindMapId || !selectedNodeId) {
+      setNotice("请选择导图节点");
+      return;
+    }
+    if (!window.aistudyKnowledgeDocuments?.load) {
+      setNotice("文档读取接口不可用");
+      return;
+    }
+    try {
+      const documentRecord = await window.aistudyKnowledgeDocuments.load({
+        courseId: activeCourseId,
+        mindMapId: activeMindMapId,
+        nodeId: selectedNodeId
+      });
+      const text = extractTextFromKnowledgeDocumentSnapshot(documentRecord?.snapshot);
+      const questions = parseQuestionsFromText(text, scope);
+      addImportedQuestions(questions, `从「${selectedNodeTitle || "当前文档"}」导入 ${questions.length} 道题`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "当前文档导入失败");
     }
   }
 
@@ -445,6 +522,11 @@ export function ExamWorkspace({ activeCourseId, activeCourseName }: ExamWorkspac
             questionSearch={questionSearch}
             onCategoryChange={setQuestionCategory}
             onSearchChange={setQuestionSearch}
+            onImportDocument={() => void importQuestionsFromCurrentDocument()}
+            onImportJson={() => jsonFileInputRef.current?.click()}
+            onExportJson={exportCurrentQuestions}
+            canImportDocument={Boolean(activeCourseId && activeMindMapId && selectedNodeId)}
+            canExport={scopedStore.questions.length > 0}
             onCreateQuestion={() => openQuestionEditor()}
             onEditQuestion={openQuestionEditor}
             onDeleteQuestion={removeQuestion}
@@ -498,6 +580,13 @@ export function ExamWorkspace({ activeCourseId, activeCourseName }: ExamWorkspac
           onSave={saveQuestionDraft}
         />
       ) : null}
+      <input
+        ref={jsonFileInputRef}
+        className="exam-hidden-file"
+        type="file"
+        accept="application/json,.json"
+        onChange={(event) => void importJsonQuestions(event.target.files?.[0])}
+      />
     </main>
   );
 }
@@ -509,6 +598,11 @@ function QuestionBankView({
   questionSearch,
   onCategoryChange,
   onSearchChange,
+  onImportDocument,
+  onImportJson,
+  onExportJson,
+  canImportDocument,
+  canExport,
   onCreateQuestion,
   onEditQuestion,
   onDeleteQuestion
@@ -519,6 +613,11 @@ function QuestionBankView({
   questionSearch: string;
   onCategoryChange: (value: string) => void;
   onSearchChange: (value: string) => void;
+  onImportDocument: () => void;
+  onImportJson: () => void;
+  onExportJson: () => void;
+  canImportDocument: boolean;
+  canExport: boolean;
   onCreateQuestion: () => void;
   onEditQuestion: (question: ExamQuestion) => void;
   onDeleteQuestion: (question: ExamQuestion) => void;
@@ -538,10 +637,24 @@ function QuestionBankView({
             <input value={questionSearch} onChange={(event) => onSearchChange(event.target.value)} />
           </label>
         </div>
-        <button className="exam-primary-button" type="button" onClick={onCreateQuestion}>
-          <Plus size={15} />
-          <span>新增题目</span>
-        </button>
+        <div className="exam-toolbar-actions">
+          <button className="exam-secondary-button" type="button" onClick={onImportDocument} disabled={!canImportDocument}>
+            <FileInput size={15} />
+            <span>文档导入</span>
+          </button>
+          <button className="exam-secondary-button" type="button" onClick={onImportJson}>
+            <Upload size={15} />
+            <span>导入</span>
+          </button>
+          <button className="exam-secondary-button" type="button" onClick={onExportJson} disabled={!canExport}>
+            <Download size={15} />
+            <span>导出</span>
+          </button>
+          <button className="exam-primary-button" type="button" onClick={onCreateQuestion}>
+            <Plus size={15} />
+            <span>新增题目</span>
+          </button>
+        </div>
       </div>
 
       <div className="exam-table">
