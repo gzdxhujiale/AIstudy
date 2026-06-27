@@ -4037,6 +4037,21 @@ h3 {
   font-size: 16px;
 }
 
+.collection-word-transcript {
+  display: grid;
+  gap: 10px;
+}
+
+.collection-word-transcript p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.collection-word-transcript .collection-transcript-item {
+  padding-left: 24px;
+  text-indent: -24px;
+}
+
 .collection-word-meta {
   color: #64748b;
 }

@@ -98,6 +98,8 @@ declare global {
 }
 
 const DOCUMENT_EDITOR_VERSION = "canvas-editor@0.9.135";
+const TRANSCRIPT_EMPTY_TEXT = "当前视频没有检测到公开字幕。后续完成音频下载和语音转写后，正文会写入这里。";
+const TRANSCRIPT_MAX_PARAGRAPH_LENGTH = 220;
 
 function formatDateTime(value: string) {
   if (!value) return "时间未知";
@@ -164,6 +166,109 @@ function addParagraph(main: unknown[], text: string, options: Record<string, unk
   }
 }
 
+function normalizeTranscriptFragment(value: string) {
+  return value
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s+([，。！？；：、,.!?;:])/g, "$1")
+    .replace(/([（(【[])\s+/g, "$1")
+    .replace(/\s+([）)】\]])/g, "$1")
+    .trim();
+}
+
+function isNumberedTranscriptItem(value: string) {
+  return /^\d{1,3}[.、]\s*\S/.test(value);
+}
+
+function normalizeTranscriptStructure(value: string) {
+  return value
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+(?=#\d{1,3}\s+)/g, "\n")
+    .replace(/(^|\n)\s*#(\d{1,3})\s+/g, "$1$2. ")
+    .replace(/[ \t]+(?=(?:概览|要闻|正文|总结|相关链接|相关阅读)(?:\s|[:：]))/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function coalesceTranscriptLines(lines: string[]) {
+  const result: string[] = [];
+  let buffer = "";
+  const flush = () => {
+    const text = normalizeTranscriptFragment(buffer);
+    if (text) result.push(text);
+    buffer = "";
+  };
+
+  for (const line of lines) {
+    const text = normalizeTranscriptFragment(line);
+    if (!text) continue;
+    if (isNumberedTranscriptItem(text)) {
+      flush();
+      result.push(text);
+      continue;
+    }
+    buffer = buffer ? `${buffer} ${text}` : text;
+    if (/[。！？!?；;]$/.test(text) || buffer.length >= TRANSCRIPT_MAX_PARAGRAPH_LENGTH) {
+      flush();
+    }
+  }
+  flush();
+  return result;
+}
+
+function splitTranscriptParagraph(value: string) {
+  const text = normalizeTranscriptFragment(value);
+  if (!text) return [];
+  if (text.length <= TRANSCRIPT_MAX_PARAGRAPH_LENGTH || isNumberedTranscriptItem(text)) return [text];
+
+  const parts = text.match(/[^。！？!?；;]+[。！？!?；;]?/g)?.map(normalizeTranscriptFragment).filter(Boolean) ?? [text];
+  const result: string[] = [];
+  let buffer = "";
+  const flush = () => {
+    const next = normalizeTranscriptFragment(buffer);
+    if (next) result.push(next);
+    buffer = "";
+  };
+
+  for (const part of parts) {
+    if (!buffer) {
+      buffer = part;
+      continue;
+    }
+    if (buffer.length + part.length > TRANSCRIPT_MAX_PARAGRAPH_LENGTH) {
+      flush();
+      buffer = part;
+    } else {
+      buffer = `${buffer}${part}`;
+    }
+  }
+  flush();
+  return result;
+}
+
+function buildReadableTranscriptParagraphs(value: string) {
+  const structured = normalizeTranscriptStructure(value);
+  if (!structured) return [];
+  const rawLines = structured
+    .split(/\n+/)
+    .map(normalizeTranscriptFragment)
+    .filter(Boolean);
+  const dedupedLines = rawLines.filter((line, index) => index === 0 || line !== rawLines[index - 1]);
+  return coalesceTranscriptLines(dedupedLines)
+    .flatMap(splitTranscriptParagraph)
+    .filter((line, index, lines) => index === 0 || line !== lines[index - 1]);
+}
+
+function getTranscriptHeading(video: BilibiliVideo) {
+  if (video.transcript.status !== "available") return "待转录内容";
+  return /文字稿/.test(video.transcript.message) ? "官方文字稿" : "视频转录";
+}
+
+function getVideoTranscriptParagraphs(video: BilibiliVideo) {
+  const paragraphs = buildReadableTranscriptParagraphs(video.transcript.text);
+  return paragraphs.length ? paragraphs : [TRANSCRIPT_EMPTY_TEXT];
+}
+
 function createVideoDocumentSnapshot(video: BilibiliVideo): KnowledgeDocumentSnapshot {
   const main: unknown[] = [];
   addHeading(main, video.title, 1);
@@ -185,11 +290,10 @@ function createVideoDocumentSnapshot(video: BilibiliVideo): KnowledgeDocumentSna
   });
   main.push(createLine());
 
-  addHeading(main, video.transcript.status === "available" ? "视频转录" : "待转录内容", 2);
-  addParagraph(
-    main,
-    video.transcript.text || "当前视频没有检测到公开字幕。后续完成音频下载和语音转写后，正文会写入这里。"
-  );
+  addHeading(main, getTranscriptHeading(video), 2);
+  for (const paragraph of getVideoTranscriptParagraphs(video)) {
+    addParagraph(main, paragraph);
+  }
 
   return {
     schemaVersion: AISTUDY_CORE_CONTRACT.schemaVersion,
@@ -236,6 +340,10 @@ export function InformationCollectionPanel({ courses, activeCourseId }: Informat
 
   const documentSnapshot = React.useMemo(
     () => (selectedVideo ? createVideoDocumentSnapshot(selectedVideo) : null),
+    [selectedVideo]
+  );
+  const selectedTranscriptParagraphs = React.useMemo(
+    () => (selectedVideo ? getVideoTranscriptParagraphs(selectedVideo) : []),
     [selectedVideo]
   );
   const collectionSteps = React.useMemo<CollectionStep[]>(() => result?.steps?.length
@@ -576,8 +684,14 @@ export function InformationCollectionPanel({ courses, activeCourseId }: Informat
                 {selectedVideo.description ? <p>{selectedVideo.description}</p> : null}
                 <h2>转录状态</h2>
                 <p>{selectedVideo.transcript.message}</p>
-                <h2>{selectedVideo.transcript.status === "available" ? "视频转录" : "待转录内容"}</h2>
-                <p>{selectedVideo.transcript.text || "当前视频没有检测到公开字幕。后续完成音频下载和语音转写后，正文会写入这里。"}</p>
+                <h2>{getTranscriptHeading(selectedVideo)}</h2>
+                <div className="collection-word-transcript">
+                  {selectedTranscriptParagraphs.map((paragraph, index) => (
+                    <p className={isNumberedTranscriptItem(paragraph) ? "collection-transcript-item" : undefined} key={`${index}-${paragraph.slice(0, 16)}`}>
+                      {paragraph}
+                    </p>
+                  ))}
+                </div>
               </>
             ) : (
               <div className="collection-word-empty">暂无文档</div>
