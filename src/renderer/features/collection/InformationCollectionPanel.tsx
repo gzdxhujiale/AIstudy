@@ -81,6 +81,11 @@ type BilibiliProcessResult = {
   workDir: string;
 };
 
+type TranscriptBlock = {
+  kind: "heading" | "item" | "paragraph";
+  text: string;
+};
+
 type InformationCollectionPanelProps = {
   courses: Course[];
   activeCourseId: string | null;
@@ -99,7 +104,8 @@ declare global {
 
 const DOCUMENT_EDITOR_VERSION = "canvas-editor@0.9.135";
 const TRANSCRIPT_EMPTY_TEXT = "当前视频没有检测到公开字幕。后续完成音频下载和语音转写后，正文会写入这里。";
-const TRANSCRIPT_MAX_PARAGRAPH_LENGTH = 220;
+const TRANSCRIPT_MAX_PARAGRAPH_LENGTH = 180;
+const TRANSCRIPT_HEADING_MAX_LENGTH = 86;
 
 function formatDateTime(value: string) {
   if (!value) return "时间未知";
@@ -151,8 +157,9 @@ function createLine(value = "") {
 }
 
 function addHeading(main: unknown[], text: string, level = 1) {
+  const size = level === 1 ? 28 : level === 2 ? 22 : 19;
   main.push(createTextElement(text, {
-    size: level === 1 ? 28 : 22,
+    size,
     bold: true,
     color: level === 1 ? "#111827" : "#1f6fd1"
   }));
@@ -180,14 +187,58 @@ function isNumberedTranscriptItem(value: string) {
   return /^\d{1,3}[.、]\s*\S/.test(value);
 }
 
+function isStandaloneTranscriptNumber(value: string) {
+  return /^\d{1,3}[.、]\s*$/.test(value);
+}
+
+function getTranscriptHeadingCandidate(value: string) {
+  return normalizeTranscriptFragment(value).replace(/^\d{1,3}[.、]\s*/, "");
+}
+
+function isTranscriptSectionHeading(value: string) {
+  const text = getTranscriptHeadingCandidate(value);
+  if (!text || text.length > TRANSCRIPT_HEADING_MAX_LENGTH) return false;
+  if (/^(概览|要闻|正文|转录正文|视频转录|官方文字稿|相关链接|相关阅读|总结|转录状态|模型发布|开发生态|产品应用|技术与洞察|行业动态)$/i.test(text)) return true;
+  if (/^AI\s*早报\s*\d{4}-\d{2}-\d{2}$/i.test(text)) return true;
+  if (isNumberedTranscriptItem(text)) return true;
+  if (/[。！？!?；;]$/.test(text)) return false;
+  return /^(第[一二三四五六七八九十百\d]+[章节部分]|[一二三四五六七八九十]+[、.．])/.test(text);
+}
+
+function isTranscriptNumberedSectionHeading(value: string) {
+  return isNumberedTranscriptItem(value) && isTranscriptSectionHeading(value);
+}
+
 function normalizeTranscriptStructure(value: string) {
   return value
     .replace(/\r/g, "\n")
     .replace(/[ \t]+(?=#\d{1,3}\s+)/g, "\n")
-    .replace(/(^|\n)\s*#(\d{1,3})\s+/g, "$1$2. ")
+    .replace(/(^|\n)\s*#(\d{1,3})(?=\s|$)/g, "$1$2. ")
+    .replace(/([。！？!?；;])\s+(?=\d{1,3}[.、]\s+\S)/g, "$1\n")
+    .replace(/[ \t]+(?=\d{1,3}[.、]\s+\S)/g, "\n")
     .replace(/[ \t]+(?=(?:概览|要闻|正文|总结|相关链接|相关阅读)(?:\s|[:：]))/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function mergeStandaloneTranscriptNumbers(lines: string[]) {
+  const result: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!isStandaloneTranscriptNumber(line)) {
+      result.push(line);
+      continue;
+    }
+    const number = line.match(/^(\d{1,3})/)?.[1];
+    const nextLine = lines[index + 1];
+    if (number && nextLine && !isStandaloneTranscriptNumber(nextLine)) {
+      result.push(`${number}. ${nextLine}`);
+      index += 1;
+    } else {
+      result.push(line);
+    }
+  }
+  return result;
 }
 
 function coalesceTranscriptLines(lines: string[]) {
@@ -203,6 +254,11 @@ function coalesceTranscriptLines(lines: string[]) {
     const text = normalizeTranscriptFragment(line);
     if (!text) continue;
     if (isNumberedTranscriptItem(text)) {
+      flush();
+      result.push(text);
+      continue;
+    }
+    if (isTranscriptSectionHeading(text)) {
       flush();
       result.push(text);
       continue;
@@ -254,9 +310,32 @@ function buildReadableTranscriptParagraphs(value: string) {
     .map(normalizeTranscriptFragment)
     .filter(Boolean);
   const dedupedLines = rawLines.filter((line, index) => index === 0 || line !== rawLines[index - 1]);
-  return coalesceTranscriptLines(dedupedLines)
+  return coalesceTranscriptLines(mergeStandaloneTranscriptNumbers(dedupedLines))
     .flatMap(splitTranscriptParagraph)
     .filter((line, index, lines) => index === 0 || line !== lines[index - 1]);
+}
+
+function buildReadableTranscriptBlocks(value: string): TranscriptBlock[] {
+  const paragraphs = buildReadableTranscriptParagraphs(value);
+  const blocks: TranscriptBlock[] = [];
+
+  for (const paragraph of paragraphs) {
+    const text = normalizeTranscriptFragment(paragraph);
+    if (!text) continue;
+    const isNumberedItem = isNumberedTranscriptItem(text);
+    const kind: TranscriptBlock["kind"] = isNumberedItem
+      ? isTranscriptNumberedSectionHeading(text)
+        ? "heading"
+        : "item"
+      : isTranscriptSectionHeading(text)
+        ? "heading"
+        : "paragraph";
+    const previous = blocks[blocks.length - 1];
+    if (previous?.kind === kind && previous.text === text) continue;
+    blocks.push({ kind, text });
+  }
+
+  return blocks;
 }
 
 function getTranscriptHeading(video: BilibiliVideo) {
@@ -264,9 +343,23 @@ function getTranscriptHeading(video: BilibiliVideo) {
   return /文字稿/.test(video.transcript.message) ? "官方文字稿" : "视频转录";
 }
 
-function getVideoTranscriptParagraphs(video: BilibiliVideo) {
-  const paragraphs = buildReadableTranscriptParagraphs(video.transcript.text);
-  return paragraphs.length ? paragraphs : [TRANSCRIPT_EMPTY_TEXT];
+function getVideoTranscriptBlocks(video: BilibiliVideo): TranscriptBlock[] {
+  const blocks = buildReadableTranscriptBlocks(video.transcript.text);
+  return blocks.length ? blocks : [{ kind: "paragraph", text: TRANSCRIPT_EMPTY_TEXT }];
+}
+
+function addTranscriptBlock(main: unknown[], block: TranscriptBlock) {
+  if (block.kind === "heading") {
+    main.push(createLine());
+    addHeading(main, block.text, 3);
+    return;
+  }
+  if (block.kind === "item") {
+    main.push(createLine());
+    addParagraph(main, block.text, { bold: true, color: "#1f6fd1" });
+    return;
+  }
+  addParagraph(main, block.text);
 }
 
 function createVideoDocumentSnapshot(video: BilibiliVideo): KnowledgeDocumentSnapshot {
@@ -291,8 +384,8 @@ function createVideoDocumentSnapshot(video: BilibiliVideo): KnowledgeDocumentSna
   main.push(createLine());
 
   addHeading(main, getTranscriptHeading(video), 2);
-  for (const paragraph of getVideoTranscriptParagraphs(video)) {
-    addParagraph(main, paragraph);
+  for (const block of getVideoTranscriptBlocks(video)) {
+    addTranscriptBlock(main, block);
   }
 
   return {
@@ -342,8 +435,8 @@ export function InformationCollectionPanel({ courses, activeCourseId }: Informat
     () => (selectedVideo ? createVideoDocumentSnapshot(selectedVideo) : null),
     [selectedVideo]
   );
-  const selectedTranscriptParagraphs = React.useMemo(
-    () => (selectedVideo ? getVideoTranscriptParagraphs(selectedVideo) : []),
+  const selectedTranscriptBlocks = React.useMemo(
+    () => (selectedVideo ? getVideoTranscriptBlocks(selectedVideo) : []),
     [selectedVideo]
   );
   const collectionSteps = React.useMemo<CollectionStep[]>(() => result?.steps?.length
@@ -686,10 +779,14 @@ export function InformationCollectionPanel({ courses, activeCourseId }: Informat
                 <p>{selectedVideo.transcript.message}</p>
                 <h2>{getTranscriptHeading(selectedVideo)}</h2>
                 <div className="collection-word-transcript">
-                  {selectedTranscriptParagraphs.map((paragraph, index) => (
-                    <p className={isNumberedTranscriptItem(paragraph) ? "collection-transcript-item" : undefined} key={`${index}-${paragraph.slice(0, 16)}`}>
-                      {paragraph}
-                    </p>
+                  {selectedTranscriptBlocks.map((block, index) => (
+                    block.kind === "heading" ? (
+                      <h3 key={`${index}-${block.text.slice(0, 16)}`}>{block.text}</h3>
+                    ) : (
+                      <p className={block.kind === "item" ? "collection-transcript-item" : undefined} key={`${index}-${block.text.slice(0, 16)}`}>
+                        {block.text}
+                      </p>
+                    )
                   ))}
                 </div>
               </>

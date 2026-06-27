@@ -4039,17 +4039,28 @@ h3 {
 
 .collection-word-transcript {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+}
+
+.collection-word-transcript h3 {
+  margin: 18px 0 2px;
+  color: #1f6fd1;
+  font-size: 17px;
+  line-height: 1.55;
 }
 
 .collection-word-transcript p {
   margin: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .collection-word-transcript .collection-transcript-item {
-  padding-left: 24px;
-  text-indent: -24px;
+  margin-top: 10px;
+  padding-left: 28px;
+  color: #17466f;
+  font-weight: 650;
+  text-indent: -28px;
 }
 
 .collection-word-meta {
