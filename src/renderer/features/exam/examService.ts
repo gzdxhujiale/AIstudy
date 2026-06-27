@@ -16,6 +16,7 @@ const STORE_VERSION = 1 as const;
 const DEFAULT_DURATION_MINUTES = 60;
 const DEFAULT_QUESTION_SCORE = 5;
 const DEFAULT_PAPER_SECTION_TITLE = "试卷题目";
+export const ANONYMOUS_EXAM_STUDENT_NAME = "匿名考试";
 
 export type ExamCourseScope = {
   courseId: string | null;
@@ -251,7 +252,7 @@ function normalizeAttempt(value: unknown, questionIds: Set<string>): ExamAttempt
     courseName: normalizeString(candidate.courseName),
     paperId,
     paperName: normalizeString(candidate.paperName),
-    studentName: normalizeString(candidate.studentName),
+    studentName: normalizeString(candidate.studentName) || ANONYMOUS_EXAM_STUDENT_NAME,
     startedAt: normalizeString(candidate.startedAt) || submittedAt,
     submittedAt,
     durationSeconds: Math.max(0, Number(candidate.durationSeconds) || 0),
@@ -445,20 +446,21 @@ export function gradeExam(questions: ExamQuestion[], answers: ExamAnswerMap): Ex
 
 export function createAttempt(input: {
   paper: ExamPaper;
-  studentName: string;
+  studentName?: string;
   questions: ExamQuestion[];
   answers: ExamAnswerMap;
   startedAt: string;
 }): ExamAttempt {
   const submittedAt = nowIso();
   const grade = gradeExam(input.questions, input.answers);
+  const studentName = normalizeString(input.studentName) || ANONYMOUS_EXAM_STUDENT_NAME;
   return {
     id: createId("attempt"),
     courseId: input.paper.courseId,
     courseName: input.paper.courseName,
     paperId: input.paper.id,
     paperName: input.paper.name,
-    studentName: input.studentName.trim(),
+    studentName,
     startedAt: input.startedAt,
     submittedAt,
     durationSeconds: Math.max(0, Math.round((Date.parse(submittedAt) - Date.parse(input.startedAt)) / 1000)),

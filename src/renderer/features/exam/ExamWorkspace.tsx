@@ -62,7 +62,6 @@ type ExamSession = {
   paper: ExamPaper;
   questions: ExamQuestion[];
   sections: ExamPaperSessionSection[];
-  studentName: string;
   startedAt: string;
   answers: ExamAnswerMap;
 };
@@ -224,7 +223,6 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
   const [selectedPaperSectionId, setSelectedPaperSectionId] = React.useState("");
   const [pendingPaperSectionId, setPendingPaperSectionId] = React.useState<string | null>(null);
   const [selectedPaperId, setSelectedPaperId] = React.useState("");
-  const [studentName, setStudentName] = React.useState("");
   const [session, setSession] = React.useState<ExamSession | null>(null);
   const [lastAttemptId, setLastAttemptId] = React.useState("");
   const [selectedAttemptId, setSelectedAttemptId] = React.useState("");
@@ -636,10 +634,6 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
       setNotice("请选择试卷");
       return;
     }
-    if (!studentName.trim()) {
-      setNotice("请输入考生姓名");
-      return;
-    }
     if (!selectedPaperQuestions.length) {
       setNotice("当前试卷没有题目");
       return;
@@ -648,7 +642,6 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
       paper: selectedPaper,
       questions: selectedPaperQuestions,
       sections: selectedPaperSections,
-      studentName: studentName.trim(),
       startedAt: new Date().toISOString(),
       answers: {}
     });
@@ -680,7 +673,6 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
     if (unansweredCount > 0 && !window.confirm(`还有 ${unansweredCount} 题未作答，确认交卷？`)) return;
     const attempt = createAttempt({
       paper: session.paper,
-      studentName: session.studentName,
       questions: session.questions,
       answers: session.answers,
       startedAt: session.startedAt
@@ -774,14 +766,12 @@ export function ExamWorkspace({ activeCourseId, activeCourseName, activeMindMapI
           <TakeExamView
             store={scopedStore}
             selectedPaperId={selectedPaperId}
-            studentName={studentName}
             selectedPaper={selectedPaper}
             selectedPaperQuestions={selectedPaperQuestions}
             selectedPaperSections={selectedPaperSections}
             session={session}
             lastAttempt={scopedStore.attempts.find((attempt) => attempt.id === lastAttemptId) ?? null}
             onPaperChange={setSelectedPaperId}
-            onStudentNameChange={setStudentName}
             onStartExam={startExam}
             onCancelSession={() => setSession(null)}
             onAnswerChange={updateSessionAnswer}
@@ -1223,14 +1213,12 @@ function PaperBuilderView({
 function TakeExamView({
   store,
   selectedPaperId,
-  studentName,
   selectedPaper,
   selectedPaperQuestions,
   selectedPaperSections,
   session,
   lastAttempt,
   onPaperChange,
-  onStudentNameChange,
   onStartExam,
   onCancelSession,
   onAnswerChange,
@@ -1238,14 +1226,12 @@ function TakeExamView({
 }: {
   store: ExamStore;
   selectedPaperId: string;
-  studentName: string;
   selectedPaper: ExamPaper | null;
   selectedPaperQuestions: ExamQuestion[];
   selectedPaperSections: ExamPaperSessionSection[];
   session: ExamSession | null;
   lastAttempt: ExamAttempt | null;
   onPaperChange: (paperId: string) => void;
-  onStudentNameChange: (value: string) => void;
   onStartExam: () => void;
   onCancelSession: () => void;
   onAnswerChange: (question: ExamQuestion, value: string) => void;
@@ -1317,10 +1303,6 @@ function TakeExamView({
   return (
     <section className="exam-start-layout">
       <div className="exam-start-panel">
-        <label>
-          <span>考生</span>
-          <input value={studentName} onChange={(event) => onStudentNameChange(event.target.value)} />
-        </label>
         <label>
           <span>试卷</span>
           <select value={selectedPaperId} onChange={(event) => onPaperChange(event.target.value)}>
@@ -1445,7 +1427,7 @@ function ExamRecordsView({
             onClick={() => onSelectAttempt(attempt.id)}
           >
             <strong>{attempt.paperName}</strong>
-            <span>{attempt.studentName} · {toPercent(attempt)}%</span>
+            <span>{toPercent(attempt)}% · {attempt.earnedScore}/{attempt.totalScore}</span>
             <small>{formatDateTime(attempt.submittedAt)}</small>
           </button>
         )) : <div className="exam-empty compact">暂无成绩</div>}
@@ -1456,7 +1438,7 @@ function ExamRecordsView({
             <header>
               <div>
                 <h2>{selectedAttempt.paperName}</h2>
-                <span>{selectedAttempt.studentName} · {formatDateTime(selectedAttempt.submittedAt)}</span>
+                <span>{formatDateTime(selectedAttempt.submittedAt)}</span>
               </div>
               <strong>{selectedAttempt.earnedScore}/{selectedAttempt.totalScore}</strong>
             </header>
