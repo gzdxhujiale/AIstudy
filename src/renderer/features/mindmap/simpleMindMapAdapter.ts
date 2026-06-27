@@ -895,14 +895,57 @@ export async function createSimpleMindMapEditor(
     height: Math.max(1, el.clientHeight)
   };
 
-  const scheduleTextEditPositionSync = () => {
+  const syncTextEditPositionNow = () => {
     const textEdit = editor.renderer?.textEdit;
     if (!textEdit?.isShowTextEdit?.()) return;
+    const editElement = textEdit.textEditNode as HTMLElement | null | undefined;
+    const node = textEdit.getCurrentEditNode?.() ?? textEdit.currentNode;
+    if (!editElement || !node) return;
+
+    textEdit.updateTextEditNode?.();
+
+    const textElement = node?._textData?.node?.node as Element | null | undefined;
+    const textRect = textElement?.getBoundingClientRect?.();
+    if (!textRect || textRect.width <= 0 || textRect.height <= 0) return;
+
+    const bubbleRect = getNodeBubbleScreenRect(node);
+    const scale = getEditorScale();
+    const paddingX = Number(textEdit.textNodePaddingX ?? 5);
+    const paddingY = Number(textEdit.textNodePaddingY ?? 3);
+    const wrapWidth = Math.max(
+      MIN_NODE_TEXT_WRAP_WIDTH * scale,
+      Number(editor.opt?.textAutoWrapWidth ?? DEFAULT_NODE_TEXT_WRAP_WIDTH) * scale
+    );
+    const stableTextWidth = Math.min(
+      wrapWidth,
+      Math.max(textRect.width, MIN_NODE_TEXT_WRAP_WIDTH * scale)
+    );
+    const contentWidth = Math.ceil(Math.max(stableTextWidth, bubbleRect?.width ?? 0));
+    const textAlign = `${editElement.style.textAlign || node?.style?.merge?.("textAlign") || "center"}`.toLowerCase();
+    const anchorRect = bubbleRect ?? textRect;
+    const contentLeft =
+      textAlign === "left" || textAlign === "start"
+        ? anchorRect.left
+        : textAlign === "right" || textAlign === "end"
+          ? anchorRect.right - contentWidth
+          : anchorRect.left + (anchorRect.width - contentWidth) / 2;
+    const editWidth = Math.max(1, contentWidth + paddingX * 2);
+    const editHeight = Math.max(1, textRect.height + paddingY * 2);
+
+    editElement.style.left = `${Math.floor(contentLeft)}px`;
+    editElement.style.top = `${Math.floor(textRect.top)}px`;
+    editElement.style.width = `${Math.ceil(editWidth)}px`;
+    editElement.style.minWidth = `${Math.ceil(editWidth)}px`;
+    editElement.style.maxWidth = `${Math.ceil(editWidth)}px`;
+    editElement.style.minHeight = `${Math.ceil(editHeight)}px`;
+  };
+
+  const scheduleTextEditPositionSync = () => {
     if (textEditPositionSyncFrame !== null) return;
     textEditPositionSyncFrame = window.requestAnimationFrame(() => {
       textEditPositionSyncFrame = null;
-      if (!destroyed && textEdit.isShowTextEdit?.()) {
-        textEdit.updateTextEditNode?.();
+      if (!destroyed) {
+        syncTextEditPositionNow();
       }
     });
   };
@@ -1172,6 +1215,7 @@ export async function createSimpleMindMapEditor(
     const currentEditNode = editor.renderer?.textEdit?.getCurrentEditNode?.();
     editingTextNode = currentEditNode ?? editingTextNode;
     setNodeTextOpacity(editingTextNode, 0);
+    scheduleTextEditPositionSync();
   };
 
   const rerenderEditedNodeText = (node: any) => {
@@ -1242,10 +1286,22 @@ export async function createSimpleMindMapEditor(
     scheduleViewportSync();
     scheduleSnapshotSync(0);
   };
+  const syncTextEditBeforeImeEvent = (event: Event) => {
+    const textEditNode = editor.renderer?.textEdit?.textEditNode;
+    const eventTarget = event.target;
+    if (!textEditNode || !(eventTarget instanceof Node) || !textEditNode.contains(eventTarget)) return;
+    syncTextEditPositionNow();
+    scheduleTextEditPositionSync();
+  };
   const bubbleResizeEdgeTarget = (editor.svg?.node ?? el) as HTMLElement | SVGSVGElement;
   bubbleResizeEdgeTarget.addEventListener("mousemove", handleBubbleResizeEdgeMouseMove, true);
   bubbleResizeEdgeTarget.addEventListener("mousedown", handleBubbleResizeEdgeMouseDown, true);
   bubbleResizeEdgeTarget.addEventListener("mouseleave", handleBubbleResizeEdgeMouseLeave, true);
+  document.addEventListener("compositionstart", syncTextEditBeforeImeEvent, true);
+  document.addEventListener("compositionupdate", syncTextEditBeforeImeEvent, true);
+  document.addEventListener("compositionend", syncTextEditBeforeImeEvent, true);
+  document.addEventListener("input", syncTextEditBeforeImeEvent, true);
+  document.addEventListener("keydown", syncTextEditBeforeImeEvent, true);
   editor.on("node_active", emitSelectionWithCache);
   editor.on("node_tree_render_end", syncSelectionFromActiveList);
   editor.on("before_show_text_edit", hideEditingNodeText);
@@ -1360,6 +1416,11 @@ export async function createSimpleMindMapEditor(
       bubbleResizeEdgeTarget.removeEventListener("mousemove", handleBubbleResizeEdgeMouseMove, true);
       bubbleResizeEdgeTarget.removeEventListener("mousedown", handleBubbleResizeEdgeMouseDown, true);
       bubbleResizeEdgeTarget.removeEventListener("mouseleave", handleBubbleResizeEdgeMouseLeave, true);
+      document.removeEventListener("compositionstart", syncTextEditBeforeImeEvent, true);
+      document.removeEventListener("compositionupdate", syncTextEditBeforeImeEvent, true);
+      document.removeEventListener("compositionend", syncTextEditBeforeImeEvent, true);
+      document.removeEventListener("input", syncTextEditBeforeImeEvent, true);
+      document.removeEventListener("keydown", syncTextEditBeforeImeEvent, true);
       setBubbleResizeEdgeCursor(false);
       editor.off("data_change", emitSnapshot);
       editor.off("layout_change", emitSnapshot);

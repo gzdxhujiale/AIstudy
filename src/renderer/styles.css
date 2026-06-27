@@ -1260,12 +1260,12 @@ h3 {
   border-radius: 0;
   background: transparent !important;
   box-shadow: none !important;
+  caret-color: #1f6fd1;
   line-height: 1.25 !important;
   word-break: keep-all !important;
   overflow-wrap: normal !important;
   line-break: auto !important;
   white-space: pre-wrap !important;
-  contain: paint;
 }
 
 .smm-node-edit-wrap:focus {
