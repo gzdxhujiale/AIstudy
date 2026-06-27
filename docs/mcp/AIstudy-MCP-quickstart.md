@@ -139,6 +139,7 @@ AISTUDY_MCP_ALLOW_EDIT = "0"
 - `zhihu`：知乎，默认端口 `9232`
 - `zhaopin`：智联招聘，默认端口 `9233`
 - `zhipin`：BOSS直聘，默认端口 `9234`
+- `xiaohongshu`：小红书，默认端口 `9235`
 
 示例：
 

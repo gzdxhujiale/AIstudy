@@ -268,7 +268,7 @@ The public version has moved beyond the first milestone. Current shipped surface
 - Document editor uses a wide page size in a vertical reading flow. Do not use `PaperDirection.HORIZONTAL` for the normal document workspace; it creates a side-by-side blank page area.
 - Current node documents can be exported to `.docx` through Electron main. Export is a projection of the active document snapshot and does not change MySQL content.
 - Importer supports `.txt`, `.md`, `.markdown`, and `.docx` into node documents.
-- Chrome fixed-port management currently covers 豆包、ChatGPT、Bilibili、知乎、智联招聘 and BOSS 直聘.
+- Chrome fixed-port management currently covers 豆包、ChatGPT、Bilibili、知乎、智联招聘、BOSS 直聘 and 小红书.
 - Settings contains runtime diagnostics, MCP control, shortcut settings, update management, and user-facing error logs.
 - AI assistant sends prompts through fixed Chrome debugging ports. Chrome discovery accepts registered executables, common install paths, and PATH launchers such as `chrome.cmd` when they point to a real `chrome.exe`; ChatGPT submission prepares the web input, sends through a trusted CDP Enter key event, then reads the reply by conversation order after the current send. Electron main uses Node `ws` with safe Buffer decoding for CDP calls.
 - MCP is a first-class module with renderer UI, Electron controller, external stdio server, HTTP remote access, Tailscale LAN exposure, read/edit tool boundaries, permissions, and call monitoring.

@@ -218,7 +218,7 @@ const chromePortSchema = {
   type: "object",
   additionalProperties: false,
   properties: {
-    platformId: { type: "string", enum: ["doubao", "chatgpt", "bilibili", "zhihu", "zhaopin", "zhipin"] },
+    platformId: { type: "string", enum: ["doubao", "chatgpt", "bilibili", "zhihu", "zhaopin", "zhipin", "xiaohongshu"] },
     url: { type: "string", maxLength: 2000 }
   }
 };
@@ -698,7 +698,7 @@ function createMcpTaskPlan(args: Record<string, unknown>) {
   const documentLike = /文档|document|正文|内容/i.test(intent);
   const locatorLike = /路径|定位|locator|handoff|本地/i.test(intent);
   const searchLike = /搜索|查找|节点|node|关键词/i.test(intent) || Boolean(nodeQuery);
-  const browserLike = /端口|浏览器|chrome|页面|网页|bilibili|知乎|豆包|chatgpt|智联|招聘|boss|直聘|zhaopin|zhipin|自动化|点击|输入|browser|port/i.test(intent);
+  const browserLike = /端口|浏览器|chrome|页面|网页|bilibili|知乎|豆包|chatgpt|智联|招聘|boss|直聘|小红书|xiaohongshu|rednote|zhaopin|zhipin|自动化|点击|输入|browser|port/i.test(intent);
 
   const steps: Array<Record<string, unknown>> = [
     { order: 1, tool: "mcp_get_started", arguments: {}, purpose: "确认 MCP 状态、全库范围和安全规则。" },
@@ -715,7 +715,7 @@ function createMcpTaskPlan(args: Record<string, unknown>) {
   }
   if (browserLike) {
     steps.push({ order: order++, tool: "chrome_ports_status", arguments: {}, purpose: "读取 AIstudy 端口管理信息，确认平台、端口、登录状态和当前页面。" });
-    steps.push({ order: order++, tool: "chrome_port_open_page", arguments: { platformId: "<doubao|chatgpt|bilibili|zhihu|zhaopin|zhipin>", url: "<optionalUrl>" }, purpose: "启动或复用目标平台 Chrome，并打开页面。" });
+    steps.push({ order: order++, tool: "chrome_port_open_page", arguments: { platformId: "<doubao|chatgpt|bilibili|zhihu|zhaopin|zhipin|xiaohongshu>", url: "<optionalUrl>" }, purpose: "启动或复用目标平台 Chrome，并打开页面。" });
   } else if (locatorLike) {
     steps.push({ order: order++, tool: "resolve_course_locator", arguments: { courseId: courseId || undefined }, purpose: "生成本地 locatorPath 给其他智能体使用。" });
   } else if (documentLike) {

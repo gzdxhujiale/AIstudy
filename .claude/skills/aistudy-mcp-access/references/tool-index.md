@@ -50,7 +50,7 @@ Keep this file synchronized with `electron/mcp/controller.ts`, `electron/mcp/rem
 
 - `resolve_course_locator`: generate local locator files for external agents; database/table values are fixed-boundary metadata, not overrideable runtime config.
 - `chrome_ports_status`: inspect fixed Chrome debug ports.
-- `chrome_port_open_page`: open or reuse a fixed-port Chrome page for `doubao`, `chatgpt`, `bilibili`, `zhihu`, `zhaopin`, or `zhipin`.
+- `chrome_port_open_page`: open or reuse a fixed-port Chrome page for `doubao`, `chatgpt`, `bilibili`, `zhihu`, `zhaopin`, `zhipin`, or `xiaohongshu`.
 
 ## Remote Permission Groups
 

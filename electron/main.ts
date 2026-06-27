@@ -536,7 +536,7 @@ type RuntimeDiagnosticReportCopyResult = {
   diagnostic: RuntimeDiagnosticResult;
 };
 
-type ChromePortPlatformId = "doubao" | "chatgpt" | "bilibili" | "zhihu" | "zhaopin" | "zhipin";
+type ChromePortPlatformId = "doubao" | "chatgpt" | "bilibili" | "zhihu" | "zhaopin" | "zhipin" | "xiaohongshu";
 
 type ChromePortDefinition = {
   id: ChromePortPlatformId;
@@ -772,6 +772,16 @@ const chromePortDefinitions: ChromePortDefinition[] = [
     authCookieDomains: ["zhipin.com"],
     authCookieNames: ["wt2", "wbg", "zp_at", "__zp_stoken__"],
     authDomKeywords: ["我的简历"]
+  },
+  {
+    id: "xiaohongshu",
+    name: "小红书",
+    port: 9235,
+    loginUrl: "https://www.xiaohongshu.com/explore",
+    hostKeyword: "xiaohongshu.com",
+    authCookieDomains: ["xiaohongshu.com"],
+    authCookieNames: ["web_session"],
+    authDomKeywords: ["创作中心", "消息"]
   }
 ];
 

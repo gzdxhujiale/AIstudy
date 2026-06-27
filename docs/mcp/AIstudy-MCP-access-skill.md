@@ -198,7 +198,7 @@ Authorization: Bearer ...
 
 ### Chrome 端口管理
 
-- `chrome_ports_status`：读取 AIstudy 端口管理信息，包含豆包、ChatGPT、Bilibili、知乎、智联招聘、BOSS直聘的平台 ID、固定端口、默认地址、连接状态和当前检测页面。
+- `chrome_ports_status`：读取 AIstudy 端口管理信息，包含豆包、ChatGPT、Bilibili、知乎、智联招聘、BOSS直聘、小红书的平台 ID、固定端口、默认地址、连接状态和当前检测页面。
 - `chrome_port_open_page`：按 `platformId` 和可选 `url` 启动或复用固定端口 Chrome 页面。AIstudy 只负责打开页面，不执行网页脚本。
 
 可用 `platformId`：
@@ -209,6 +209,7 @@ Authorization: Bearer ...
 - `zhihu`
 - `zhaopin`
 - `zhipin`
+- `xiaohongshu`
 
 示例：
 

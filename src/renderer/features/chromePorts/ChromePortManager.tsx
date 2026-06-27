@@ -1,7 +1,7 @@
 import React from "react";
 import { CheckCircle2, ExternalLink, Globe2, Loader2, RefreshCw, XCircle } from "lucide-react";
 
-type ChromePortPlatformId = "doubao" | "chatgpt" | "bilibili" | "zhihu" | "zhaopin" | "zhipin";
+type ChromePortPlatformId = "doubao" | "chatgpt" | "bilibili" | "zhihu" | "zhaopin" | "zhipin" | "xiaohongshu";
 
 type ChromePortStatus = {
   id: ChromePortPlatformId;

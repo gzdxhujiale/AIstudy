@@ -18,7 +18,7 @@
 - 课程与分区管理：创建、重命名、移动、排序、折叠、删除、MySQL 持久化、本地兜底和 pending 重放。
 - 思维导图：`simple-mind-map` 编辑、自动保存、节点投影、目录同步、主题元素、右键文字排版、快捷键分支操作、导出。
 - 文档编辑：`@hufe921/canvas-editor` 节点文档、快照保存、导入、AI 小窗、格式刷、DOCX 导出。
-- AI/浏览器端口：豆包、ChatGPT、Bilibili、知乎、智联招聘、BOSS 直聘固定端口管理。
+- AI/浏览器端口：豆包、ChatGPT、Bilibili、知乎、智联招聘、BOSS 直聘、小红书固定端口管理。
 - 系统能力：错误日志、运行诊断、更新检测、下载、安装包打包、GitHub 同步检查。
 - MCP：设置页控制台、外部 stdio server、HTTP/Tailscale 内网访问、权限细分、远程调用监控、导图/文档读写工具。
 

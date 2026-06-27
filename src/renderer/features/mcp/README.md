@@ -74,7 +74,7 @@ Chrome 端口：
 
 文档写入统一走 AIstudy 标准排版模板。`write_node_document` 和 `append_node_document` 传入 `text` 时，外部助手只需要给干净文本或 Markdown 标题；系统会自动按内置 Word 文档风格生成快照：章节标题橙色加粗，小节标题紫色加粗，条款标题蓝色加粗，正文深色常规文本。外部助手不应该手工拼散乱样式块或空文本块。
 
-Chrome 端口只暴露两个工具：`chrome_ports_status` 和 `chrome_port_open_page`。前者返回平台、端口、默认地址、登录/连接状态和当前检测页面；后者按 `platformId` 和可选 `url` 启动或复用固定端口 Chrome。当前平台包含 `doubao`、`chatgpt`、`bilibili`、`zhihu`、`zhaopin` 和 `zhipin`。AIstudy 不在 MCP 里执行网页脚本。
+Chrome 端口只暴露两个工具：`chrome_ports_status` 和 `chrome_port_open_page`。前者返回平台、端口、默认地址、登录/连接状态和当前检测页面；后者按 `platformId` 和可选 `url` 启动或复用固定端口 Chrome。当前平台包含 `doubao`、`chatgpt`、`bilibili`、`zhihu`、`zhaopin`、`zhipin` 和 `xiaohongshu`。AIstudy 不在 MCP 里执行网页脚本。
 
 内网访问使用 Tailscale Serve，不使用 Funnel，不开放公网。远程 MCP 默认只读；需要外部设备编辑时，在设置页打开远程编辑总开关，并按知识库管理、导图编辑、文档写入、删除操作分别授权。完整流程见 `docs/mcp/AIstudy-MCP-tailscale-access.md`。
 

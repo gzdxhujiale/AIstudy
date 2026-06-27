@@ -65,4 +65,4 @@ Locator files may include the public runtime data root, fixed database name, fix
 chrome_ports_status -> chrome_port_open_page({ platformId, url? })
 ```
 
-Allowed platform IDs: `doubao`, `chatgpt`, `bilibili`, `zhihu`, `zhaopin`, `zhipin`.
+Allowed platform IDs: `doubao`, `chatgpt`, `bilibili`, `zhihu`, `zhaopin`, `zhipin`, `xiaohongshu`.
