@@ -7,6 +7,8 @@ export type ExamOption = {
 
 export type ExamQuestion = {
   id: string;
+  courseId: string | null;
+  courseName: string;
   type: ExamQuestionType;
   stem: string;
   options: ExamOption[];
@@ -21,6 +23,8 @@ export type ExamQuestion = {
 
 export type ExamPaper = {
   id: string;
+  courseId: string | null;
+  courseName: string;
   name: string;
   description: string;
   durationMinutes: number;
@@ -44,6 +48,8 @@ export type ExamAttemptDetail = {
 
 export type ExamAttempt = {
   id: string;
+  courseId: string | null;
+  courseName: string;
   paperId: string;
   paperName: string;
   studentName: string;

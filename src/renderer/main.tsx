@@ -1371,7 +1371,7 @@ function App() {
       ) : activeSection === "collection" ? (
         <InformationCollectionPanel courses={courses} activeCourseId={activeCourseId} />
       ) : activeSection === "exam" ? (
-        <ExamWorkspace />
+        <ExamWorkspace activeCourseId={activeCourseId} activeCourseName={activeCourse?.name ?? ""} />
       ) : (
         <ChromePortManager />
       )}

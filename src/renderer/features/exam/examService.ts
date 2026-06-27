@@ -15,6 +15,11 @@ const STORE_VERSION = 1 as const;
 const DEFAULT_DURATION_MINUTES = 60;
 const DEFAULT_QUESTION_SCORE = 5;
 
+export type ExamCourseScope = {
+  courseId: string | null;
+  courseName: string;
+};
+
 export const EXAM_QUESTION_TYPE_LABELS: Record<ExamQuestionType, string> = {
   single: "单选",
   multiple: "多选",
@@ -44,6 +49,22 @@ function nowIso() {
 
 function normalizeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeCourseId(value: unknown) {
+  const text = normalizeString(value);
+  return text || null;
+}
+
+export function createExamCourseScope(courseId: string | null | undefined, courseName: string | null | undefined): ExamCourseScope {
+  return {
+    courseId: normalizeCourseId(courseId),
+    courseName: normalizeString(courseName) || "未分区"
+  };
+}
+
+export function isSameExamCourse(left: string | null | undefined, right: string | null | undefined) {
+  return normalizeCourseId(left) === normalizeCourseId(right);
 }
 
 function normalizeScore(value: unknown) {
@@ -119,6 +140,8 @@ function normalizeQuestion(value: unknown): ExamQuestion | null {
   const updatedAt = normalizeString(candidate.updatedAt) || createdAt;
   return {
     id: normalizeString(candidate.id) || createId("question"),
+    courseId: normalizeCourseId(candidate.courseId),
+    courseName: normalizeString(candidate.courseName),
     type,
     stem,
     options: normalizeOptions(type, candidate.options),
@@ -144,6 +167,8 @@ function normalizePaper(value: unknown, questionIds: Set<string>): ExamPaper | n
     : [];
   return {
     id: normalizeString(candidate.id) || createId("paper"),
+    courseId: normalizeCourseId(candidate.courseId),
+    courseName: normalizeString(candidate.courseName),
     name,
     description: normalizeString(candidate.description),
     durationMinutes: normalizeDuration(candidate.durationMinutes),
@@ -180,6 +205,8 @@ function normalizeAttempt(value: unknown, questionIds: Set<string>): ExamAttempt
     : [];
   return {
     id,
+    courseId: normalizeCourseId(candidate.courseId),
+    courseName: normalizeString(candidate.courseName),
     paperId,
     paperName: normalizeString(candidate.paperName),
     studentName: normalizeString(candidate.studentName),
@@ -224,10 +251,12 @@ export async function saveExamStore(store: ExamStore) {
   await writeLocalSnapshot(EXAM_STORE_KEY, "exam", normalizeExamStore(store));
 }
 
-export function createQuestionDraft(type: ExamQuestionType = "single"): ExamQuestion {
+export function createQuestionDraft(scope: ExamCourseScope = createExamCourseScope(null, ""), type: ExamQuestionType = "single"): ExamQuestion {
   const timestamp = nowIso();
   return {
     id: createId("question"),
+    courseId: scope.courseId,
+    courseName: scope.courseName,
     type,
     stem: "",
     options: createDefaultOptions(type),
@@ -241,10 +270,12 @@ export function createQuestionDraft(type: ExamQuestionType = "single"): ExamQues
   };
 }
 
-export function createPaperDraft(): ExamPaper {
+export function createPaperDraft(scope: ExamCourseScope = createExamCourseScope(null, "")): ExamPaper {
   const timestamp = nowIso();
   return {
     id: createId("paper"),
+    courseId: scope.courseId,
+    courseName: scope.courseName,
     name: "",
     description: "",
     durationMinutes: DEFAULT_DURATION_MINUTES,
@@ -358,6 +389,8 @@ export function createAttempt(input: {
   const grade = gradeExam(input.questions, input.answers);
   return {
     id: createId("attempt"),
+    courseId: input.paper.courseId,
+    courseName: input.paper.courseName,
     paperId: input.paper.id,
     paperName: input.paper.name,
     studentName: input.studentName.trim(),
@@ -382,6 +415,43 @@ export function appendAttempt(store: ExamStore, attempt: ExamAttempt): ExamStore
 export function getQuestionsForPaper(store: ExamStore, paper: ExamPaper) {
   const questionMap = new Map(store.questions.map((question) => [question.id, question]));
   return paper.questionIds.map((id) => questionMap.get(id)).filter((question): question is ExamQuestion => Boolean(question));
+}
+
+export function getScopedExamStore(store: ExamStore, scope: ExamCourseScope): ExamStore {
+  const questions = store.questions.filter((question) => isSameExamCourse(question.courseId, scope.courseId));
+  const questionIds = new Set(questions.map((question) => question.id));
+  const papers = store.papers
+    .filter((paper) => isSameExamCourse(paper.courseId, scope.courseId))
+    .map((paper) => ({ ...paper, questionIds: paper.questionIds.filter((questionId) => questionIds.has(questionId)) }));
+  const paperIds = new Set(papers.map((paper) => paper.id));
+  const attempts = store.attempts.filter((attempt) => isSameExamCourse(attempt.courseId, scope.courseId) && paperIds.has(attempt.paperId));
+  return {
+    version: STORE_VERSION,
+    questions,
+    papers,
+    attempts
+  };
+}
+
+export function assignUnscopedExamItemsToCourse(store: ExamStore, scope: ExamCourseScope): ExamStore {
+  if (!scope.courseId) return store;
+  let changed = false;
+  const questions = store.questions.map((question) => {
+    if (question.courseId) return question;
+    changed = true;
+    return { ...question, courseId: scope.courseId, courseName: scope.courseName, updatedAt: nowIso() };
+  });
+  const papers = store.papers.map((paper) => {
+    if (paper.courseId) return paper;
+    changed = true;
+    return { ...paper, courseId: scope.courseId, courseName: scope.courseName, updatedAt: nowIso() };
+  });
+  const attempts = store.attempts.map((attempt) => {
+    if (attempt.courseId) return attempt;
+    changed = true;
+    return { ...attempt, courseId: scope.courseId, courseName: scope.courseName };
+  });
+  return changed ? { ...store, questions, papers, attempts } : store;
 }
 
 export function formatDuration(seconds: number) {

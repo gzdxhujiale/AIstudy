@@ -15,8 +15,10 @@ import {
 } from "lucide-react";
 import {
   appendAttempt,
+  assignUnscopedExamItemsToCourse,
   createAttempt,
   createDefaultOptions,
+  createExamCourseScope,
   createEmptyExamStore,
   createPaperDraft,
   createQuestionDraft,
@@ -25,6 +27,7 @@ import {
   EXAM_QUESTION_TYPE_LABELS,
   formatDuration,
   getQuestionsForPaper,
+  getScopedExamStore,
   loadExamStore,
   saveExamStore,
   upsertPaper,
@@ -34,6 +37,11 @@ import type { ExamAnswerMap, ExamAttempt, ExamOption, ExamPaper, ExamQuestion, E
 
 type ExamTab = "questions" | "papers" | "take" | "records";
 type SaveState = "idle" | "saving" | "saved" | "error";
+
+type ExamWorkspaceProps = {
+  activeCourseId: string | null;
+  activeCourseName: string;
+};
 
 type ExamSession = {
   paper: ExamPaper;
@@ -125,7 +133,11 @@ function getAvailableCategories(questions: ExamQuestion[]) {
   return Array.from(new Set(questions.map((question) => question.category).filter(Boolean))).sort((left, right) => left.localeCompare(right, "zh-CN"));
 }
 
-export function ExamWorkspace() {
+export function ExamWorkspace({ activeCourseId, activeCourseName }: ExamWorkspaceProps) {
+  const scope = React.useMemo(
+    () => createExamCourseScope(activeCourseId, activeCourseName),
+    [activeCourseId, activeCourseName]
+  );
   const [store, setStore] = React.useState<ExamStore>(() => createEmptyExamStore());
   const [isHydrated, setIsHydrated] = React.useState(false);
   const [saveState, setSaveState] = React.useState<SaveState>("idle");
@@ -134,26 +146,32 @@ export function ExamWorkspace() {
   const [questionDraft, setQuestionDraft] = React.useState<ExamQuestion | null>(null);
   const [questionSearch, setQuestionSearch] = React.useState("");
   const [questionCategory, setQuestionCategory] = React.useState("全部");
-  const [paperDraft, setPaperDraft] = React.useState<ExamPaper>(() => createPaperDraft());
+  const [paperDraft, setPaperDraft] = React.useState<ExamPaper>(() => createPaperDraft(scope));
   const [paperQuestionSearch, setPaperQuestionSearch] = React.useState("");
   const [selectedPaperId, setSelectedPaperId] = React.useState("");
   const [studentName, setStudentName] = React.useState("");
   const [session, setSession] = React.useState<ExamSession | null>(null);
   const [lastAttemptId, setLastAttemptId] = React.useState("");
   const [selectedAttemptId, setSelectedAttemptId] = React.useState("");
+  const selectedScopeIdRef = React.useRef<string | null | undefined>(undefined);
 
   React.useEffect(() => {
     let canceled = false;
     loadExamStore()
       .then((nextStore) => {
         if (canceled) return;
-        setStore(nextStore);
+        const scopedInitialStore = assignUnscopedExamItemsToCourse(nextStore, scope);
+        const initialScopedView = getScopedExamStore(scopedInitialStore, scope);
+        setStore(scopedInitialStore);
         setIsHydrated(true);
-        if (nextStore.papers[0]) {
-          setSelectedPaperId(nextStore.papers[0].id);
-          setPaperDraft(clonePaper(nextStore.papers[0]));
+        if (scopedInitialStore !== nextStore) void saveExamStore(scopedInitialStore);
+        if (initialScopedView.papers[0]) {
+          setSelectedPaperId(initialScopedView.papers[0].id);
+          setPaperDraft(clonePaper(initialScopedView.papers[0]));
+        } else {
+          setPaperDraft(createPaperDraft(scope));
         }
-        if (nextStore.attempts[0]) setSelectedAttemptId(nextStore.attempts[0].id);
+        if (initialScopedView.attempts[0]) setSelectedAttemptId(initialScopedView.attempts[0].id);
       })
       .catch((error) => {
         if (canceled) return;
@@ -163,7 +181,7 @@ export function ExamWorkspace() {
     return () => {
       canceled = true;
     };
-  }, []);
+  }, [scope]);
 
   const commitStore = React.useCallback((nextStore: ExamStore, nextNotice = "") => {
     setStore(nextStore);
@@ -177,40 +195,54 @@ export function ExamWorkspace() {
       });
   }, []);
 
-  const categories = React.useMemo(() => getAvailableCategories(store.questions), [store.questions]);
+  const scopedStore = React.useMemo(() => getScopedExamStore(store, scope), [scope, store]);
+
+  React.useEffect(() => {
+    if (!isHydrated) return;
+    const scopeChanged = selectedScopeIdRef.current !== scope.courseId;
+    if (!scopeChanged && selectedPaperId) return;
+    selectedScopeIdRef.current = scope.courseId;
+    if (scopeChanged) setSession(null);
+    const nextPaper = scopedStore.papers[0] ?? null;
+    setSelectedPaperId(nextPaper?.id ?? "");
+    setPaperDraft(nextPaper ? clonePaper(nextPaper) : createPaperDraft(scope));
+    setSelectedAttemptId(scopedStore.attempts[0]?.id ?? "");
+  }, [isHydrated, scope, scopedStore.attempts, scopedStore.papers, selectedPaperId]);
+
+  const categories = React.useMemo(() => getAvailableCategories(scopedStore.questions), [scopedStore.questions]);
   const filteredQuestions = React.useMemo(() => {
     const keyword = questionSearch.trim().toLowerCase();
-    return store.questions.filter((question) => {
+    return scopedStore.questions.filter((question) => {
       const matchesCategory = questionCategory === "全部" || question.category === questionCategory;
       const matchesKeyword = !keyword || `${question.stem} ${question.category}`.toLowerCase().includes(keyword);
       return matchesCategory && matchesKeyword;
     });
-  }, [questionCategory, questionSearch, store.questions]);
+  }, [questionCategory, questionSearch, scopedStore.questions]);
 
   const availablePaperQuestions = React.useMemo(() => {
     const keyword = paperQuestionSearch.trim().toLowerCase();
-    return store.questions.filter((question) => {
+    return scopedStore.questions.filter((question) => {
       if (paperDraft.questionIds.includes(question.id)) return false;
       if (!keyword) return true;
       return `${question.stem} ${question.category}`.toLowerCase().includes(keyword);
     });
-  }, [paperDraft.questionIds, paperQuestionSearch, store.questions]);
+  }, [paperDraft.questionIds, paperQuestionSearch, scopedStore.questions]);
 
   const selectedPaper = React.useMemo(
-    () => store.papers.find((paper) => paper.id === selectedPaperId) ?? null,
-    [selectedPaperId, store.papers]
+    () => scopedStore.papers.find((paper) => paper.id === selectedPaperId) ?? null,
+    [scopedStore.papers, selectedPaperId]
   );
   const selectedPaperQuestions = React.useMemo(
-    () => (selectedPaper ? getQuestionsForPaper(store, selectedPaper) : []),
-    [selectedPaper, store]
+    () => (selectedPaper ? getQuestionsForPaper(scopedStore, selectedPaper) : []),
+    [scopedStore, selectedPaper]
   );
   const selectedAttempt = React.useMemo(
-    () => store.attempts.find((attempt) => attempt.id === selectedAttemptId) ?? store.attempts[0] ?? null,
-    [selectedAttemptId, store.attempts]
+    () => scopedStore.attempts.find((attempt) => attempt.id === selectedAttemptId) ?? scopedStore.attempts[0] ?? null,
+    [scopedStore.attempts, selectedAttemptId]
   );
 
   function openQuestionEditor(question?: ExamQuestion) {
-    setQuestionDraft(question ? cloneQuestion(question) : createQuestionDraft());
+    setQuestionDraft(question ? cloneQuestion(question) : createQuestionDraft(scope));
     setNotice("");
   }
 
@@ -239,6 +271,8 @@ export function ExamWorkspace() {
     }
     const nextStore = upsertQuestion(store, {
       ...questionDraft,
+      courseId: scope.courseId,
+      courseName: scope.courseName,
       category: questionDraft.category.trim() || "默认",
       options: questionDraft.options.map((option) => ({ ...option, text: option.text.trim() })),
       answer: questionDraft.answer.map((answer) => answer.trim()).filter(Boolean),
@@ -257,7 +291,7 @@ export function ExamWorkspace() {
   }
 
   function startNewPaper() {
-    const draft = createPaperDraft();
+    const draft = createPaperDraft(scope);
     setPaperDraft(draft);
     setSelectedPaperId("");
     setNotice("");
@@ -276,6 +310,8 @@ export function ExamWorkspace() {
     }
     const nextPaper = {
       ...paperDraft,
+      courseId: scope.courseId,
+      courseName: scope.courseName,
       name: paperDraft.name.trim(),
       description: paperDraft.description.trim()
     };
@@ -289,7 +325,7 @@ export function ExamWorkspace() {
     if (!window.confirm(`删除试卷「${paper.name}」？`)) return;
     const nextStore = deletePaper(store, paper.id);
     commitStore(nextStore, "试卷已删除");
-    const nextPaper = nextStore.papers[0];
+    const nextPaper = getScopedExamStore(nextStore, scope).papers[0];
     setSelectedPaperId(nextPaper?.id ?? "");
     setPaperDraft(nextPaper ? clonePaper(nextPaper) : createPaperDraft());
   }
@@ -375,7 +411,7 @@ export function ExamWorkspace() {
         <header className="exam-header">
           <div>
             <h1>考试</h1>
-            <span>{saveState === "saving" ? "保存中" : saveState === "error" ? "保存失败" : saveState === "saved" ? "已保存" : ""}</span>
+            <span>{saveState === "saving" ? "保存中" : saveState === "error" ? "保存失败" : saveState === "saved" ? "已保存" : scope.courseName}</span>
           </div>
           <nav className="exam-tabs" aria-label="考试模块">
             {EXAM_TABS.map((tab) => (
@@ -415,7 +451,7 @@ export function ExamWorkspace() {
           />
         ) : activeTab === "papers" ? (
           <PaperBuilderView
-            store={store}
+            store={scopedStore}
             paperDraft={paperDraft}
             paperQuestionSearch={paperQuestionSearch}
             availablePaperQuestions={availablePaperQuestions}
@@ -430,13 +466,13 @@ export function ExamWorkspace() {
           />
         ) : activeTab === "take" ? (
           <TakeExamView
-            store={store}
+            store={scopedStore}
             selectedPaperId={selectedPaperId}
             studentName={studentName}
             selectedPaper={selectedPaper}
             selectedPaperQuestions={selectedPaperQuestions}
             session={session}
-            lastAttempt={store.attempts.find((attempt) => attempt.id === lastAttemptId) ?? null}
+            lastAttempt={scopedStore.attempts.find((attempt) => attempt.id === lastAttemptId) ?? null}
             onPaperChange={setSelectedPaperId}
             onStudentNameChange={setStudentName}
             onStartExam={startExam}
@@ -446,7 +482,7 @@ export function ExamWorkspace() {
           />
         ) : (
           <ExamRecordsView
-            attempts={store.attempts}
+            attempts={scopedStore.attempts}
             selectedAttempt={selectedAttempt}
             onSelectAttempt={setSelectedAttemptId}
           />
