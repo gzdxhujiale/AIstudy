@@ -1,6 +1,6 @@
 {
   "name": "aistudy",
-  "version": "0.1.73",
+  "version": "0.1.74",
   "description": "AIstudy desktop shell.",
   "author": "SnowLove0303",
   "private": false,
@@ -42,7 +42,8 @@
     "docx": "^9.7.1",
     "jszip": "^3.10.1",
     "mysql2": "^3.22.5",
-    "pdfjs-dist": "^6.1.200"
+    "pdfjs-dist": "^6.1.200",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@hufe921/canvas-editor": "^0.9.135",

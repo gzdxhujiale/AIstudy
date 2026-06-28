@@ -8,7 +8,7 @@
 - GitHub 仓库：`https://github.com/SnowLove0303/AIstudy-Public.git`
 - 应用名：`AIstudy`
 - 当前包名：`aistudy`
-- 当前版本号：`0.1.73`，以 `package.json` 的 `version` 为准
+- 当前版本号：`0.1.74`，以 `package.json` 的 `version` 为准
 - 公开版定位：开发端、发布端、纯净版基线
 - 自用版仓库：`F:\XIANGMU\AIstudy`
 
@@ -18,13 +18,13 @@
 
 截至 2026-06-28，本公开版已从 MCP/知识库主链路扩展到教材、考试和信息采集的完整应用壳：
 
-- 最新安装包：`release\AIstudy-Setup-0.1.73.exe`
+- 最新安装包：`release\AIstudy-Setup-0.1.74.exe`
 - 最新免安装运行版：`release\win-unpacked\AIstudy.exe`
 - 最新更新摘要见：`docs/updates/INDEX.md`
 - 当前主要分支：`main`
 - 当前本地 HEAD 与远端 `origin/main` 一致，提交为 `abb69bf feat: persist exam papers in mysql`；`git rev-list --left-right --count "HEAD...@{u}"` 为 `0 0`。
 - 当前公开版已经具备课程/分区、思维导图、节点 Word 文档、教材 PDF 与节点笔记、题库考试、信息采集、AI 助手、Chrome 固定端口、MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、更新管理、错误日志、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层和右侧文档格式面板。
-- 最近一轮更新集中在教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化修复，以及文档内 AI 小窗拖动体验优化。
+- 最近一轮更新集中在教材节点页段绑定状态隔离、已绑定锁定/取消重设，以及教材 PDF 独立窗口残留清理。
 
 当前接手时工作区不是干净状态。`git status --short --branch` 显示 `main...origin/main`，并已有 `electron/main.ts`、`electron/preload.cts`、`package.json`、`package-lock.json`、`scripts/mcp/aistudy-mcp-server.mjs`、打包脚本、MCP 文档、导图/文档/主界面样式等修改；同时有 `electron/textbookStore.ts`、`scripts/package/refresh-shortcuts.ps1`、`src/renderer/features/textbook/` 未跟踪。接手者必须先确认这些改动归属，不要回滚或覆盖。
 
@@ -566,8 +566,17 @@ npm run dist:oneclick
 - 如果使用 `npm run dist:oneclick`，打包后检查并恢复 `docs/updates/INDEX.md` 的真实更新摘要。
 - 发布前建议运行 `npm run github:sync:doctor`，确认 origin、upstream、ahead/behind、工作区、GitHub CLI 登录和 latest release 安装包资产状态。
 
+问题修复和正式发布的边界：
+
+- 具体 bugfix 开发线程修完并完成基础验证后，可以直接打包产出用户可打开的真实改后版本，便于用户立刻验收修复效果。
+- bugfix 开发线程即使可以打包，也不得提交、推送、创建 GitHub Release、决定版本号或编写最终发布说明。
+- 主管线程负责真实功能验收；验收通过后，提交和推送由主管线程执行。
+- 版本号、更新摘要和发布记录口径仍由版本管理线程确认。
+- 发行版本线程后续用于公开发行包流程、异机反馈和发行资产管理，不再作为普通 bugfix 闭环里的默认打包负责人。
+
 ## 11. 最近版本记录
 
+- `0.1.74`：修复教材节点页段绑定状态隔离、已绑定锁定/取消重设，并清理教材 PDF 独立窗口残留。
 - `0.1.73`：修复教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化问题，并优化文档内 AI 小窗拖动体验。
 - `0.1.72`：一键打包生成安装包。
 - `0.1.71`：Word 导出按 AIstudy 文档快照格式生成。
@@ -679,7 +688,7 @@ electron/main.ts
 - `src/renderer/features/textbook/` 原本缺 README，本轮已补齐；后续教材功能变化要同步维护该 README。
 - `scripts/mcp/aistudy-mcp-server.mjs` 的 Chrome 端口平台列表缺少 `xiaohongshu`，而 `electron/main.ts`、`electron/mcp/controller.ts` 和 MCP 文档已经包含小红书 `9235`；后续改 MCP 端口能力时要先同步这里。
 - `docs/deployment-new-machine.md` 示例安装包版本仍是旧的 `0.1.14`，具体版本必须以 `package.json`、`docs/updates/INDEX.md` 和 `release/AIstudy-Setup-*.exe` 为准。
-- `docs/ARCHITECTURE.md` 的 “Current Implemented Surfaces” 标题仍停在 `0.1.68`，而当前包版本和更新索引已更新为 `0.1.73`；新线程判断版本时以 `package.json`、`docs/updates/INDEX.md`、`release/AIstudy-Setup-*.exe` 和本交接文档为准。
+- `docs/ARCHITECTURE.md` 的 “Current Implemented Surfaces” 标题仍停在 `0.1.68`，而当前包版本和更新索引已更新为 `0.1.74`；新线程判断版本时以 `package.json`、`docs/updates/INDEX.md`、`release/AIstudy-Setup-*.exe` 和本交接文档为准。
 - `electron/main.ts` 仍承载大量业务服务逻辑。继续扩展考试、教材、采集或 MCP 时，优先抽到独立 main-side service 文件，再通过 preload 暴露，不要继续扩大主进程巨文件。
 - 本轮检索了 `TODO/FIXME/placeholder/mock/sample/lorem/测试/占位/假/dummy/fake`。新增可疑业务假入口未发现；命中主要是历史研究文档里的 fixture/sample 计划、CSS/输入框 placeholder、导入报告 `sample` 字段，以及考试政治真题种子入口。后续如果改 UI，应继续遵守“不展示未接入真实能力的入口”。
 - 当前工作区已有用户/历史改动，交接者在任何提交、打包或发布前必须重新跑 `git status --short --branch` 并确认改动归属。
@@ -695,6 +704,7 @@ electron/main.ts
 - 全量遍历要求：新线程必须先用 VS Code 打开项目，并对 `F:\XIANGMU\AIstudy-public` 整个文件夹做 1-3 轮全量遍历；至少用 `rg --files` 或等效方式扫过 docs、scripts、electron、src/renderer/features、release、配置和关键入口，达到能直接开发和判断风险的程度后再进入具体任务。
 - 必读文件：本文件、`README.md`、`docs/README.md`、`docs/ARCHITECTURE.md`、`docs/功能规划/README.md`、目标模块 README、相关主进程/preload/renderer 入口。
 - 必跑验证：按任务选择 `npm run setup:doctor`、`npm run build`、`npm run qa:error-codes`、`npm run dist:oneclick`、`npm run github:sync:doctor`。
+- bugfix 打包边界：如果新线程负责具体问题修复，修完并完成基础验证后可以打包出用户可打开的真实改后版本；但不得提交、推送、创建 GitHub Release、决定版本号或发布说明。主管线程负责验收和提交推送，版本管理线程负责版本号、更新摘要和发布记录口径。
 - 交付回传：改了哪些文件、验证命令结果、是否涉及用户数据/打包/快捷方式/GitHub 发布、交接文档是否需要同步更新。
 
 新线程接手前必须先读本文件并完成全项目遍历，不要凭旧记忆或局部 diff 改代码；功能开发完成后，如果架构、数据边界、发布流程、VS Code 接管方式或模块 README 发生变化，要先更新本文件，再交付。

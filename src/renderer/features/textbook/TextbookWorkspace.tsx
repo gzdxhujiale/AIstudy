@@ -9,6 +9,7 @@ import {
   Link2,
   Loader2,
   Save,
+  Unlink,
   ZoomIn,
   ZoomOut
 } from "lucide-react";
@@ -43,6 +44,7 @@ type TextbookWorkspaceProps = {
 };
 
 type SaveState = "idle" | "loading" | "saving" | "saved" | "error";
+type DeletedTextbookNoteKey = { textbookId: string; nodeId: string };
 
 const SAVE_DEBOUNCE_MS = 700;
 const DEFAULT_ZOOM = 100;
@@ -72,6 +74,10 @@ function clampPage(value: number, asset: TextbookAsset | null) {
 
 function getNoteKey(textbookId: string, nodeId: string) {
   return `${textbookId}\u0000${nodeId}`;
+}
+
+function getBindingContextKey(scopeKey: string, textbookId: string | null, nodeId: string | null) {
+  return `${scopeKey}\u0000${textbookId ?? ""}\u0000${nodeId ?? ""}`;
 }
 
 function normalizePageRange(start: number, end: number, asset: TextbookAsset | null) {
@@ -117,6 +123,15 @@ function mergeTextbookStores(base: TextbookStore, incoming: TextbookStore, scope
     version: 1,
     assets: Array.from(assets.values()),
     notes: Array.from(notes.values())
+  }, scope);
+}
+
+function removeDeletedNotes(store: TextbookStore, deletedNoteKeys: DeletedTextbookNoteKey[], scope: { courseId: string; mindMapId: string }) {
+  if (!deletedNoteKeys.length) return store;
+  const keys = new Set(deletedNoteKeys.map((item) => getNoteKey(item.textbookId, item.nodeId)));
+  return normalizeTextbookStore({
+    ...store,
+    notes: store.notes.filter((note) => !keys.has(getNoteKey(note.textbookId, note.nodeId)))
   }, scope);
 }
 
@@ -196,6 +211,7 @@ export function TextbookWorkspace({
   const activeScopeKeyRef = React.useRef("");
   const bindingNodeIdRef = React.useRef<string | null>(selectedNode.id);
   const loadedBindingNodeIdRef = React.useRef<string | null>(selectedNode.id);
+  const loadedBindingContextKeyRef = React.useRef("");
   const loadedScopeKeyRef = React.useRef("");
   const pageNumberRef = React.useRef(pageNumber);
   const noteEditorRef = React.useRef<TextbookNoteEditorHandle | null>(null);
@@ -217,6 +233,10 @@ export function TextbookWorkspace({
       : storeRef.current
   ), []);
   const activeAsset = store.assets.find((asset) => asset.id === activeAssetId) ?? store.assets[0] ?? null;
+  const activeBindingContextKey = getBindingContextKey(scopeKey, activeAsset?.id ?? null, bindingNodeId);
+  const isActiveBindingLoaded = isBindingReady
+    && loadedBindingNodeIdRef.current === bindingNodeId
+    && loadedBindingContextKeyRef.current === activeBindingContextKey;
   const outlineNodes = React.useMemo(() => flattenOutlineItems(outline), [outline]);
   const bindingOutlineNode = bindingNodeId ? outlineNodes.find((node) => node.nodeId === bindingNodeId) ?? null : null;
   const bindingNodeTitle = selectedNode.id === bindingNodeId
@@ -239,18 +259,26 @@ export function TextbookWorkspace({
   }, [pageNumber]);
 
   const hydrateBindingNodeState = React.useCallback((nodeId: string | null) => {
+    const isCurrentBindingRequest = () => (
+      activeScopeKeyRef.current === scopeKey && bindingNodeIdRef.current === nodeId
+    );
+    if (!isCurrentBindingRequest()) return;
+
     const sourceStore = getLatestStore();
     const targetAsset = activeAssetId
       ? sourceStore.assets.find((asset) => asset.id === activeAssetId) ?? null
       : sourceStore.assets[0] ?? null;
+    const contextKey = getBindingContextKey(scopeKey, targetAsset?.id ?? null, nodeId);
 
     if (!targetAsset) {
+      if (!isCurrentBindingRequest()) return;
       setNoteSnapshot(createEmptyNoteSnapshot());
       setNoteEditorKey(`empty:${scopeKey}:${nodeId ?? "none"}`);
       setPageStartDraft(Number.NaN);
       setPageEndDraft(Number.NaN);
       setIsRangeEdited(false);
       loadedBindingNodeIdRef.current = nodeId;
+      loadedBindingContextKeyRef.current = contextKey;
       setIsBindingReady(true);
       lastSavedNoteSignatureRef.current = "";
       pendingNoteSignatureRef.current = null;
@@ -272,10 +300,12 @@ export function TextbookWorkspace({
       setPageStartDraft(Number.NaN);
       setPageEndDraft(Number.NaN);
     }
+    if (!isCurrentBindingRequest()) return;
     setIsRangeEdited(false);
     lastSavedNoteSignatureRef.current = nextNote ? createNoteSnapshotSignature(nextSnapshot, nextPageStart, nextPageEnd) : "";
     pendingNoteSignatureRef.current = null;
     loadedBindingNodeIdRef.current = nodeId;
+    loadedBindingContextKeyRef.current = contextKey;
     setIsBindingReady(true);
     setNoteSnapshot(nextSnapshot);
     setNoteEditorKey(`${targetAsset.id}:${nodeId ?? "none"}:${nextNote?.updatedAt ?? "new"}`);
@@ -283,19 +313,32 @@ export function TextbookWorkspace({
 
   const requestBindingNode = React.useCallback((nodeId: string | null, syncOutline = true) => {
     if (bindingNodeIdRef.current === nodeId) {
+      const latestStore = getLatestStore();
+      const targetAsset = activeAssetId
+        ? latestStore.assets.find((asset) => asset.id === activeAssetId) ?? null
+        : latestStore.assets[0] ?? null;
+      const expectedContextKey = getBindingContextKey(scopeKey, targetAsset?.id ?? null, nodeId);
+      if (loadedBindingNodeIdRef.current !== nodeId || loadedBindingContextKeyRef.current !== expectedContextKey) {
+        hydrateBindingNodeState(nodeId);
+      }
       if (syncOutline && nodeId) onNodeSelect?.(nodeId);
       return;
     }
     bindingNodeIdRef.current = nodeId;
     loadedBindingNodeIdRef.current = null;
+    loadedBindingContextKeyRef.current = "";
     setIsBindingReady(false);
+    setPageStartDraft(Number.NaN);
+    setPageEndDraft(Number.NaN);
     setIsRangeEdited(false);
+    setNoteSnapshot(createEmptyNoteSnapshot());
+    setNoteEditorKey(`loading:${scopeKey}:${nodeId ?? "none"}`);
     lastSavedNoteSignatureRef.current = "";
     pendingNoteSignatureRef.current = null;
     setBindingNodeId(nodeId);
     hydrateBindingNodeState(nodeId);
     if (syncOutline && nodeId) onNodeSelect?.(nodeId);
-  }, [hydrateBindingNodeState, onNodeSelect]);
+  }, [activeAssetId, getLatestStore, hydrateBindingNodeState, onNodeSelect, scopeKey]);
 
   const selectBindingNode = React.useCallback((nodeId: string | null) => {
     requestBindingNode(nodeId, true);
@@ -330,6 +373,7 @@ export function TextbookWorkspace({
       setMessage("");
       bindingNodeIdRef.current = null;
       loadedBindingNodeIdRef.current = null;
+      loadedBindingContextKeyRef.current = "";
       setIsBindingReady(true);
       lastSavedNoteSignatureRef.current = "";
       pendingNoteSignatureRef.current = null;
@@ -348,6 +392,7 @@ export function TextbookWorkspace({
     setNoteSnapshot(createEmptyNoteSnapshot());
     setNoteEditorKey(`empty:${scopeKey}`);
     loadedBindingNodeIdRef.current = null;
+    loadedBindingContextKeyRef.current = "";
     setIsBindingReady(false);
     lastSavedNoteSignatureRef.current = "";
     pendingNoteSignatureRef.current = null;
@@ -379,15 +424,15 @@ export function TextbookWorkspace({
     };
   }, [scopeKey]);
 
-  const persistStore = React.useCallback(async (nextStore: TextbookStore) => {
+  const persistStore = React.useCallback(async (nextStore: TextbookStore, deletedNoteKeys: DeletedTextbookNoteKey[] = []) => {
     if (!scope) return nextStore;
     const requestScopeKey = scopeKey;
     if (activeScopeKeyRef.current !== requestScopeKey) return nextStore;
-    const storeToSave = mergeTextbookStores(getLatestStore(), nextStore, scope);
+    const storeToSave = removeDeletedNotes(mergeTextbookStores(getLatestStore(), nextStore, scope), deletedNoteKeys, scope);
     commitStore(storeToSave);
     setSaveState("saving");
     try {
-      const savedStore = await saveTextbookStore(scope, storeToSave);
+      const savedStore = await saveTextbookStore(scope, storeToSave, { deletedNoteKeys });
       if (activeScopeKeyRef.current !== requestScopeKey) return savedStore;
       if (pendingStoreRef.current === nextStore || pendingStoreRef.current === storeToSave) {
         pendingStoreRef.current = null;
@@ -397,7 +442,7 @@ export function TextbookWorkspace({
         lastSavedNoteSignatureRef.current = pendingNoteSignatureRef.current;
         pendingNoteSignatureRef.current = null;
       }
-      commitStore(mergeTextbookStores(getLatestStore(), savedStore, scope));
+      commitStore(removeDeletedNotes(mergeTextbookStores(getLatestStore(), savedStore, scope), deletedNoteKeys, scope));
       setSaveState("saved");
       setMessage("");
       return savedStore;
@@ -408,9 +453,9 @@ export function TextbookWorkspace({
     }
   }, [commitStore, getLatestStore, scopeKey]);
 
-  const schedulePersist = React.useCallback((nextStore: TextbookStore, immediate = false) => {
+  const schedulePersist = React.useCallback((nextStore: TextbookStore, immediate = false, deletedNoteKeys: DeletedTextbookNoteKey[] = []) => {
     const requestScopeKey = scopeKey;
-    const mergedStore = scope ? mergeTextbookStores(getLatestStore(), nextStore, scope) : nextStore;
+    const mergedStore = scope ? removeDeletedNotes(mergeTextbookStores(getLatestStore(), nextStore, scope), deletedNoteKeys, scope) : nextStore;
     commitStore(mergedStore);
     pendingStoreRef.current = mergedStore;
     pendingStoreScopeKeyRef.current = requestScopeKey;
@@ -419,7 +464,7 @@ export function TextbookWorkspace({
       saveTimerRef.current = null;
     }
     if (immediate) {
-      return persistStore(mergedStore);
+      return persistStore(mergedStore, deletedNoteKeys);
     }
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
@@ -432,6 +477,8 @@ export function TextbookWorkspace({
   const persistNoteSnapshot = React.useCallback(async (snapshot: KnowledgeDocumentSnapshot, immediate = false, targetPage = pageNumber) => {
     if (!scope || !activeAsset || !bindingNodeId) return;
     if (loadedBindingNodeIdRef.current !== bindingNodeId) return;
+    const bindingContextKey = getBindingContextKey(scopeKey, activeAsset.id, bindingNodeId);
+    if (loadedBindingContextKeyRef.current !== bindingContextKey) return;
     const content = extractTextFromSnapshot(snapshot.content.main);
     if (!activeNote && !content.trim() && !immediate) return;
 
@@ -483,12 +530,41 @@ export function TextbookWorkspace({
   }, [activeAsset?.id, activeNote?.id, bindingNodeId, bindingNodeTitle, getLatestStore, isRangeEdited, pageEndDraft, pageNumber, pageStartDraft, schedulePersist, scopeKey]);
 
   const saveNoteNow = React.useCallback(async () => {
-    if (!isBindingReady || loadedBindingNodeIdRef.current !== bindingNodeId) return noteSnapshot;
+    if (!isActiveBindingLoaded || !activeNote) return noteSnapshot;
     const latestSnapshot = await noteEditorRef.current?.getSnapshot() ?? noteSnapshot;
     setNoteSnapshot(latestSnapshot);
     await persistNoteSnapshot(latestSnapshot, true);
     return latestSnapshot;
-  }, [bindingNodeId, isBindingReady, noteSnapshot, persistNoteSnapshot]);
+  }, [activeNote?.id, isActiveBindingLoaded, noteSnapshot, persistNoteSnapshot]);
+
+  const bindPageRangeNow = React.useCallback(async () => {
+    if (!isActiveBindingLoaded) return noteSnapshot;
+    const latestSnapshot = await noteEditorRef.current?.getSnapshot() ?? noteSnapshot;
+    setNoteSnapshot(latestSnapshot);
+    await persistNoteSnapshot(latestSnapshot, true);
+    return latestSnapshot;
+  }, [isActiveBindingLoaded, noteSnapshot, persistNoteSnapshot]);
+
+  const cancelBindingNow = React.useCallback(async () => {
+    if (!scope || !activeAsset || !bindingNodeId || !isActiveBindingLoaded || !activeNote) return;
+    const latestSnapshot = await noteEditorRef.current?.getSnapshot() ?? noteSnapshot;
+    const range = normalizePageRange(activeNote.pageStart || activeNote.pageNumber, activeNote.pageEnd || activeNote.pageNumber, activeAsset);
+    const baseStore = getLatestStore();
+    const noteKey = getNoteKey(activeAsset.id, bindingNodeId);
+    const nextStore = normalizeTextbookStore({
+      ...baseStore,
+      notes: baseStore.notes.filter((note) => getNoteKey(note.textbookId, note.nodeId) !== noteKey)
+    }, scope);
+    setNoteSnapshot(latestSnapshot);
+    setPageStartDraft(range.pageStart);
+    setPageEndDraft(range.pageEnd);
+    setIsRangeEdited(true);
+    lastSavedNoteSignatureRef.current = "";
+    pendingNoteSignatureRef.current = null;
+    await schedulePersist(nextStore, true, [{ textbookId: activeAsset.id, nodeId: bindingNodeId }]);
+    setSaveState("saved");
+    setMessage("已取消绑定。");
+  }, [activeAsset?.id, activeNote?.id, bindingNodeId, getLatestStore, isActiveBindingLoaded, noteSnapshot, schedulePersist, scopeKey]);
 
   const flushPendingSave = React.useCallback(async () => {
     if (activeAsset && bindingNodeId) {
@@ -520,12 +596,12 @@ export function TextbookWorkspace({
 
   React.useEffect(() => {
     hydrateBindingNodeState(bindingNodeId);
-  }, [activeAsset?.id, bindingNodeId, hydrateBindingNodeState, nodeSelectionRequest?.nonce]);
+  }, [activeAsset?.id, bindingNodeId, hydrateBindingNodeState]);
 
   React.useEffect(() => {
-    if (!activeAsset || !bindingNodeId || !isBindingReady) return;
+    if (!activeAsset || !bindingNodeId || !activeNote || !isActiveBindingLoaded) return;
     persistNoteSnapshot(noteSnapshot, false);
-  }, [isBindingReady, noteSnapshot]);
+  }, [activeAsset?.id, activeNote?.id, bindingNodeId, isActiveBindingLoaded, noteSnapshot, persistNoteSnapshot]);
 
   function applyPage(nextPage: number) {
     if (!activeAsset) return;
@@ -573,6 +649,9 @@ export function TextbookWorkspace({
         assets: [asset, ...baseStore.assets.filter((item) => item.id !== asset.id)]
       }, scope);
       setActiveAssetId(asset.id);
+      loadedBindingNodeIdRef.current = null;
+      loadedBindingContextKeyRef.current = "";
+      setIsBindingReady(false);
       setPageNumber(1);
       setPageStartDraft(Number.NaN);
       setPageEndDraft(Number.NaN);
@@ -646,8 +725,19 @@ export function TextbookWorkspace({
   const noteCount = activeAsset ? store.notes.filter((note) => note.textbookId === activeAsset.id && note.content.trim()).length : 0;
   const pageStartValue = Number.isFinite(pageStartDraft) ? clampPage(pageStartDraft, activeAsset) : "";
   const pageEndValue = Number.isFinite(pageEndDraft) ? clampPage(pageEndDraft, activeAsset) : "";
-  const noteEditorDisabled = !activeAsset || !bindingNodeId || !isBindingReady;
-  const canSaveBinding = Boolean(activeAsset && bindingNodeId && isBindingReady);
+  const hasActiveBinding = Boolean(activeNote && isActiveBindingLoaded);
+  const canEditPageRange = Boolean(activeAsset && bindingNodeId && isActiveBindingLoaded && !hasActiveBinding);
+  const canBindPageRange = canEditPageRange;
+  const canCancelBinding = Boolean(activeAsset && bindingNodeId && hasActiveBinding);
+  const canUseBoundNote = Boolean(activeAsset && bindingNodeId && hasActiveBinding);
+  const noteEditorDisabled = !activeAsset || !bindingNodeId || !isActiveBindingLoaded;
+  const bindingStatusText = !activeAsset || !bindingNodeId
+    ? "未选中"
+    : !isActiveBindingLoaded
+      ? "检查中"
+      : hasActiveBinding
+        ? "已绑定"
+        : "未绑定";
 
   return (
     <div className="textbook-workspace">
@@ -660,6 +750,9 @@ export function TextbookWorkspace({
               const asset = store.assets.find((item) => item.id === event.target.value) ?? null;
               const nextPage = asset ? clampPage(asset.lastPage, asset) : 1;
               setActiveAssetId(asset?.id ?? null);
+              loadedBindingNodeIdRef.current = null;
+              loadedBindingContextKeyRef.current = "";
+              setIsBindingReady(false);
               setPageNumber(nextPage);
               setPageStartDraft(Number.NaN);
               setPageEndDraft(Number.NaN);
@@ -763,10 +856,20 @@ export function TextbookWorkspace({
                 ))}
               </select>
             </div>
-            <button type="button" title="绑定页段" onClick={() => void saveNoteNow()} disabled={!canSaveBinding}>
-              <Link2 size={15} />
-              <span>绑定</span>
-            </button>
+            <div className="textbook-binding-actions">
+              <span className={hasActiveBinding ? "textbook-binding-badge bound" : "textbook-binding-badge"}>{bindingStatusText}</span>
+              {hasActiveBinding ? (
+                <button type="button" title="取消绑定" onClick={() => void cancelBindingNow()} disabled={!canCancelBinding}>
+                  <Unlink size={15} />
+                  <span>取消</span>
+                </button>
+              ) : (
+                <button type="button" title="绑定页段" onClick={() => void bindPageRangeNow()} disabled={!canBindPageRange}>
+                  <Link2 size={15} />
+                  <span>绑定</span>
+                </button>
+              )}
+            </div>
           </header>
           <div className="textbook-range-row">
             <span>页段</span>
@@ -779,7 +882,7 @@ export function TextbookWorkspace({
                 setIsRangeEdited(true);
                 setPageStartDraft(event.target.value === "" ? Number.NaN : Number(event.target.value));
               }}
-              disabled={!canSaveBinding}
+              disabled={!canEditPageRange}
               aria-label="起始页"
             />
             <span>-</span>
@@ -792,7 +895,7 @@ export function TextbookWorkspace({
                 setIsRangeEdited(true);
                 setPageEndDraft(event.target.value === "" ? Number.NaN : Number(event.target.value));
               }}
-              disabled={!canSaveBinding}
+              disabled={!canEditPageRange}
               aria-label="结束页"
             />
           </div>
@@ -810,11 +913,11 @@ export function TextbookWorkspace({
           <footer>
             <span>{activeAsset ? `${formatFileSize(activeAsset.byteSize)}${noteCount ? ` · ${noteCount} 条笔记` : ""}` : `${outlineNodeCount} 个目录节点`}</span>
             <div className="textbook-note-actions">
-              <button type="button" title="载入文档" onClick={() => void loadNoteIntoDocument()} disabled={!canSaveBinding || isLoadingIntoDocument}>
+              <button type="button" title="载入文档" onClick={() => void loadNoteIntoDocument()} disabled={!canUseBoundNote || isLoadingIntoDocument}>
                 {isLoadingIntoDocument ? <Loader2 className="spin-icon" size={15} /> : <FileText size={15} />}
                 <span>载入文档</span>
               </button>
-              <button type="button" onClick={() => void saveNoteNow()} disabled={!canSaveBinding}>
+              <button type="button" onClick={() => void saveNoteNow()} disabled={!canUseBoundNote}>
                 <Save size={15} />
                 <span>保存</span>
               </button>

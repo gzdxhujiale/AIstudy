@@ -5,7 +5,7 @@ declare global {
   interface Window {
     aistudyTextbooks?: {
       load: (scope: TextbookScope) => Promise<unknown>;
-      save: (request: TextbookScope & { store: TextbookStore }) => Promise<unknown>;
+      save: (request: TextbookScope & { store: TextbookStore; deletedNoteKeys?: Array<{ textbookId: string; nodeId: string }> }) => Promise<unknown>;
       choosePdf: (scope: TextbookScope) => Promise<unknown>;
       readPdf: (request: TextbookScope & { assetId: string }) => Promise<ArrayBuffer | Uint8Array>;
       openPdfWindow: (request: TextbookScope & { assetId: string; pageNumber: number; zoom: number }) => Promise<unknown>;
@@ -121,8 +121,12 @@ export async function loadTextbookStore(scope: TextbookScope) {
   return normalizeTextbookStore(await requireTextbookApi().load(scope), scope);
 }
 
-export async function saveTextbookStore(scope: TextbookScope, store: TextbookStore) {
-  return normalizeTextbookStore(await requireTextbookApi().save({ ...scope, store }), scope);
+export async function saveTextbookStore(
+  scope: TextbookScope,
+  store: TextbookStore,
+  options: { deletedNoteKeys?: Array<{ textbookId: string; nodeId: string }> } = {}
+) {
+  return normalizeTextbookStore(await requireTextbookApi().save({ ...scope, store, ...options }), scope);
 }
 
 export async function chooseTextbookPdf(scope: TextbookScope) {

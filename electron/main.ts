@@ -8709,6 +8709,7 @@ function createMainWindow() {
 
   mainWindow.on("closed", () => {
     mainWindow = null;
+    closeTextbookPdfWindows();
   });
 
   if (isDev) {
@@ -8720,6 +8721,15 @@ function createMainWindow() {
 
 let isTextbookProtocolHandlerRegistered = false;
 const textbookPdfWindows = new Map<string, BrowserWindow>();
+
+function closeTextbookPdfWindows() {
+  for (const window of textbookPdfWindows.values()) {
+    if (!window.isDestroyed()) {
+      window.destroy();
+    }
+  }
+  textbookPdfWindows.clear();
+}
 
 function createTextbookPdfResponse(filePath: string, request: Request, fileSize: number) {
   const baseHeaders = {
@@ -8837,6 +8847,26 @@ function getTextbookNoteKey(note: TextbookStore["notes"][number]) {
   return `${note.textbookId}\u0000${note.nodeId}`;
 }
 
+function normalizeDeletedTextbookNoteKeys(value: unknown) {
+  if (!Array.isArray(value)) return new Set<string>();
+  const keys = new Set<string>();
+  for (const item of value) {
+    const candidate = item && typeof item === "object" ? item as { textbookId?: unknown; nodeId?: unknown } : {};
+    const textbookId = typeof candidate.textbookId === "string" ? candidate.textbookId.trim() : "";
+    const nodeId = typeof candidate.nodeId === "string" ? candidate.nodeId.trim() : "";
+    if (textbookId && nodeId) keys.add(`${textbookId}\u0000${nodeId}`);
+  }
+  return keys;
+}
+
+function removeDeletedTextbookNotes(store: TextbookStore, deletedNoteKeys: Set<string>, scope: { courseId: string; mindMapId: string }) {
+  if (!deletedNoteKeys.size) return store;
+  return normalizeTextbookStore({
+    ...store,
+    notes: store.notes.filter((note) => !deletedNoteKeys.has(getTextbookNoteKey(note)))
+  }, scope);
+}
+
 function mergeTextbookStores(base: TextbookStore, incoming: TextbookStore, scope: { courseId: string; mindMapId: string }) {
   const assets = new Map<string, TextbookStore["assets"][number]>();
   for (const asset of base.assets) assets.set(asset.id, asset);
@@ -8933,16 +8963,19 @@ async function loadTextbookStore(input: unknown): Promise<TextbookStore> {
 }
 
 async function saveTextbookStore(input: unknown): Promise<TextbookStore> {
-  const request = input && typeof input === "object" ? input as { courseId?: unknown; mindMapId?: unknown; store?: unknown } : {};
+  const request = input && typeof input === "object"
+    ? input as { courseId?: unknown; mindMapId?: unknown; store?: unknown; deletedNoteKeys?: unknown }
+    : {};
   const scope = normalizeTextbookScope(request);
-  const normalized = normalizeTextbookStore(request.store, scope);
+  const deletedNoteKeys = normalizeDeletedTextbookNoteKeys(request.deletedNoteKeys);
+  const normalized = removeDeletedTextbookNotes(normalizeTextbookStore(request.store, scope), deletedNoteKeys, scope);
   const localStore = await readLocalTextbookStore(scope.courseId, scope.mindMapId);
-  const mergedLocalStore = mergeTextbookStores(localStore, normalized, scope);
+  const mergedLocalStore = removeDeletedTextbookNotes(mergeTextbookStores(localStore, normalized, scope), deletedNoteKeys, scope);
   await writeLocalTextbookStore(scope.courseId, scope.mindMapId, mergedLocalStore);
   try {
     const runtime = await getMysqlRuntime();
     const remoteCurrentStore = await readTextbookStoreFromMysql(runtime, scope);
-    const storeToSync = mergeTextbookStores(remoteCurrentStore, mergedLocalStore, scope);
+    const storeToSync = removeDeletedTextbookNotes(mergeTextbookStores(remoteCurrentStore, mergedLocalStore, scope), deletedNoteKeys, scope);
     const remoteStore = await writeTextbookStoreToMysql(runtime, storeToSync, scope);
     await writeLocalTextbookStore(scope.courseId, scope.mindMapId, remoteStore);
     return remoteStore;
@@ -9019,6 +9052,8 @@ async function openTextbookPdfWindow(input: unknown) {
   const key = `${request.courseId}:${request.mindMapId}:${request.assetId}`;
   const existing = textbookPdfWindows.get(key);
   if (existing && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    if (!existing.isVisible()) existing.show();
     existing.focus();
     return true;
   }
@@ -9043,12 +9078,19 @@ async function openTextbookPdfWindow(input: unknown) {
   });
 
   textbookPdfWindows.set(key, pdfWindow);
+  const destroyWindow = () => {
+    if (!pdfWindow.isDestroyed()) {
+      pdfWindow.destroy();
+    }
+  };
   pdfWindow.once("ready-to-show", () => {
     if (!pdfWindow.isDestroyed()) pdfWindow.show();
   });
   pdfWindow.on("closed", () => {
     textbookPdfWindows.delete(key);
   });
+  pdfWindow.on("unresponsive", destroyWindow);
+  pdfWindow.webContents.on("render-process-gone", destroyWindow);
 
   const query = {
     view: "textbook-pdf",
@@ -9064,9 +9106,15 @@ async function openTextbookPdfWindow(input: unknown) {
     for (const [name, value] of Object.entries(query)) {
       url.searchParams.set(name, value);
     }
-    await pdfWindow.loadURL(url.toString());
+    await pdfWindow.loadURL(url.toString()).catch((error) => {
+      destroyWindow();
+      throw error;
+    });
   } else {
-    await pdfWindow.loadFile(path.join(__dirname, "../dist/index.html"), { query });
+    await pdfWindow.loadFile(path.join(__dirname, "../dist/index.html"), { query }).catch((error) => {
+      destroyWindow();
+      throw error;
+    });
   }
   return true;
 }
@@ -9096,6 +9144,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("will-quit", () => {
+  closeTextbookPdfWindows();
   stopMcpEventBridge();
   void mcpRemoteAccessController.close();
   void mysqlRuntime?.pool.end();
