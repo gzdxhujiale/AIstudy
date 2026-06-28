@@ -167,11 +167,14 @@ CREATE TABLE IF NOT EXISTS `course_management_courses` (
 - 课程可以归属某个分区，也可以保持 `section_id = NULL` 作为「未分区」课程。
 - 删除分区时软删除分区，并将该分区下课程事务性移入「未分区」，不会删除课程本身。
 - 删除课程写入 `deleted_at` 软删除；后续接入节点、边、文档后，需要扩展联动软删除。
-- 本地 `courses.json` 只作为轻量镜像和 MySQL 失败兜底，不是第二套事实源。
+- 本地 `courses.json` 只作为轻量镜像和 MySQL 失败兜底，不是第二套事实源，也不是纯净发行版的初始数据源。
+- 分区、课程排序、折叠状态等入口索引应以数据库为准；纯净安装包不得携带打包机上的本地分区/课程镜像。
 
 ## 故障恢复策略
 
 - MySQL 读取失败时，主进程回退读取本地 `courses.json`，不阻断课程侧栏渲染。
+- 纯净新装时，本地回退镜像必须是空状态；安装后应自动发现公开版固定数据库配置或 AIstudy 管理的本机数据库服务并连接固定 `aistudy_public`。
+- 如果数据库不可用但本地镜像被使用，UI 必须明确这是本机镜像/本机模式，避免用户误判为数据库仍然连接。
 - MySQL 写入失败时，课程/分区命令先落本地 `courses.json`，再追加轻量操作到 `course-pending-operations.json`。
 - `course-pending-operations.json` 只记录课程/分区索引操作，不记录思维导图、Word 文档、附件或 AI 生成内容。
 - MySQL 恢复后，下一次 `courses:load` 会在读取表数据前按顺序重放 pending 操作；全部成功后清空 pending 文件。

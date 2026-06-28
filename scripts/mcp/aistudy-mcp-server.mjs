@@ -804,7 +804,8 @@ function escapeIdentifier(value, label) {
 
 async function readJsonFile(filePath) {
   try {
-    return JSON.parse(await fs.readFile(filePath, "utf8"));
+    const text = await fs.readFile(filePath, "utf8");
+    return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
   } catch (error) {
     if (error?.code === "ENOENT") return {};
     throw error;

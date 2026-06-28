@@ -42,6 +42,8 @@ const UPDATE_DOWNLOAD_CHUNK_SIZE_BYTES = 4 * 1024 * 1024;
 const UPDATE_DOWNLOAD_RETRY_LIMIT = 4;
 const UPDATE_DOWNLOAD_NET_TIMEOUT_MS = 120000;
 const TEXTBOOK_PDF_PROTOCOL = "aistudy-pdf";
+const MANAGED_MYSQL_SERVICE_NAME = "AIstudyMySQL";
+const MANAGED_MYSQL_START_TIMEOUT_MS = 3500;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -971,7 +973,7 @@ function mergeChromePortSavedStores(...stores: ChromePortSavedStore[]) {
 async function readLocalChromePortSavedStore() {
   try {
     const raw = await fs.readFile(getChromePortStatePath(), "utf8");
-    return normalizeChromePortSavedStore(JSON.parse(raw));
+    return normalizeChromePortSavedStore(parseJsonText(raw));
   } catch {
     return { version: 1, ports: {} } satisfies ChromePortSavedStore;
   }
@@ -3936,7 +3938,7 @@ function readSetting(source: unknown, key: keyof MysqlConfig) {
 
 async function readMysqlConfigFile(filePath: string) {
   try {
-    return JSON.parse(await fs.readFile(filePath, "utf8")) as Partial<MysqlConfig>;
+    return parseJsonText(await fs.readFile(filePath, "utf8")) as Partial<MysqlConfig>;
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return {};
@@ -3951,6 +3953,71 @@ function readPublicRuntimeEnv(name: string) {
 
 function readPublicMysqlEnv(name: string) {
   return readPublicRuntimeEnv(`MYSQL_${name}`);
+}
+
+function parseJsonText<T = unknown>(text: string): T {
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text) as T;
+}
+
+function getProgramDataAistudyRoot() {
+  const programData = process.env.ProgramData?.trim() || "C:\\ProgramData";
+  return path.join(programData, "AIstudy");
+}
+
+function isLocalMysqlHost(host: string) {
+  const normalized = host.trim().toLowerCase();
+  return normalized === "127.0.0.1" || normalized === "localhost" || normalized === "::1";
+}
+
+function parseManagedMysqlIniPort(text: string) {
+  const match = text.match(/^\s*port\s*=\s*(\d+)\s*$/im);
+  return match ? parsePort(match[1], 3306) : 3306;
+}
+
+async function readManagedMysqlRuntimeConfig() {
+  try {
+    const iniPath = path.join(getProgramDataAistudyRoot(), "mysql", "my.ini");
+    const iniText = await fs.readFile(iniPath, "utf8");
+    return {
+      host: "127.0.0.1",
+      port: parseManagedMysqlIniPort(iniText),
+      user: "root",
+      password: ""
+    } satisfies Partial<MysqlConfig>;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return {};
+    }
+    throw error;
+  }
+}
+
+async function waitForLocalPort(port: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await canConnectToLocalPort(port, 450)) return true;
+    await delay(250);
+  }
+  return false;
+}
+
+async function tryStartManagedMysqlRuntime(config: MysqlConfig) {
+  if (process.platform !== "win32" || !isLocalMysqlHost(config.host)) return;
+
+  const managedConfig = await readManagedMysqlRuntimeConfig();
+  if (!hasMysqlConnectionSetting(managedConfig) || Number(managedConfig.port) !== config.port) return;
+  if (await canConnectToLocalPort(config.port, 600)) return;
+
+  try {
+    await execFileAsync("sc.exe", ["start", MANAGED_MYSQL_SERVICE_NAME], {
+      windowsHide: true,
+      timeout: 2500
+    });
+  } catch {
+    // The service may already be starting or require elevation; the actual MySQL connection check remains authoritative.
+  }
+
+  await waitForLocalPort(config.port, MANAGED_MYSQL_START_TIMEOUT_MS);
 }
 
 function hasPublicMysqlEnvSetting() {
@@ -4025,11 +4092,19 @@ async function createCourseLocatorFile(input: CourseLocatorRequest) {
 }
 
 async function readMysqlConfig(): Promise<MysqlConfig> {
+  const managedMysqlConfig = await readManagedMysqlRuntimeConfig();
   const executableConfig = await readMysqlConfigFile(path.join(path.dirname(process.execPath), "mysql.config.json"));
+  const programDataConfig = await readMysqlConfigFile(path.join(getProgramDataAistudyRoot(), "mysql.config.json"));
+  const programDataPublicConfig = await readMysqlConfigFile(path.join(getProgramDataAistudyRoot(), "AIstudyPublicData", "config", "mysql.config.json"));
+  const programDataUserConfig = await readMysqlConfigFile(path.join(getProgramDataAistudyRoot(), "AIstudyUserData", "mysql.config.json"));
   const dataRootConfig = await readMysqlConfigFile(getAistudyDataPath("config", "mysql.config.json"));
   const userConfig = await readMysqlConfigFile(path.join(app.getPath("userData"), "mysql.config.json"));
-  const mergedConfig = { ...executableConfig, ...dataRootConfig, ...userConfig };
+  const mergedConfig = { ...managedMysqlConfig, ...programDataConfig, ...programDataPublicConfig, ...programDataUserConfig, ...executableConfig, ...dataRootConfig, ...userConfig };
   const explicitlyConfigured = hasPublicMysqlEnvSetting()
+    || hasMysqlConnectionSetting(managedMysqlConfig)
+    || hasMysqlConnectionSetting(programDataConfig)
+    || hasMysqlConnectionSetting(programDataPublicConfig)
+    || hasMysqlConnectionSetting(programDataUserConfig)
     || hasMysqlConnectionSetting(executableConfig)
     || hasMysqlConnectionSetting(dataRootConfig)
     || hasMysqlConnectionSetting(userConfig);
@@ -4301,7 +4376,7 @@ async function backfillKnowledgeDocumentHasContent(pool: Pool, documentTable: st
     let hasContent = false;
     if (row.payloadJson) {
       try {
-        hasContent = knowledgeDocumentSnapshotHasContent(normalizeKnowledgeDocumentSnapshot(JSON.parse(row.payloadJson)));
+        hasContent = knowledgeDocumentSnapshotHasContent(normalizeKnowledgeDocumentSnapshot(parseJsonText(row.payloadJson)));
       } catch {
         hasContent = false;
       }
@@ -4604,6 +4679,7 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
   if (app.isPackaged && !config.explicitlyConfigured) {
     throw new Error("MySQL is not configured. The public clean package will use the local empty data store until MySQL is configured.");
   }
+  await tryStartManagedMysqlRuntime(config);
   try {
     await ensureDatabase(config);
   } catch (error) {
@@ -4732,7 +4808,7 @@ async function readLocalCourseStore(): Promise<CourseStore> {
   const filePath = await pathExists(getCourseStoreFilePath()) ? getCourseStoreFilePath() : getLegacyCourseStoreFilePath();
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    return normalizeCourseStore(JSON.parse(raw));
+    return normalizeCourseStore(parseJsonText(raw));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return { sections: [], courses: [], activeCourseId: null };
@@ -4818,7 +4894,7 @@ async function readPendingCourseOperations() {
   const filePath = await pathExists(getPendingCourseOperationsFilePath()) ? getPendingCourseOperationsFilePath() : getLegacyPendingCourseOperationsFilePath();
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    return normalizePendingCourseOperations(JSON.parse(raw));
+    return normalizePendingCourseOperations(parseJsonText(raw));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return [];
@@ -4844,12 +4920,23 @@ async function appendPendingCourseOperation(action: PendingCourseOperation["acti
   await writePendingCourseOperations(operations);
 }
 
+async function canUseCourseMysqlRuntime() {
+  try {
+    const runtime = await getMysqlRuntime();
+    await runtime.pool.query("SELECT 1");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function getCourseSyncStatus(): Promise<CourseSyncStatus> {
   const operations = await readPendingCourseOperations();
   const hasReplayFailure = operations.some((operation) => operation.retryCount > 0 || Boolean(operation.lastError));
+  const mysqlReady = await canUseCourseMysqlRuntime();
   return {
-    state: operations.length === 0 ? "saved" : hasReplayFailure ? "attention" : "waiting",
-    pendingCount: operations.length
+    state: mysqlReady && operations.length === 0 ? "saved" : hasReplayFailure || !mysqlReady ? "attention" : "waiting",
+    pendingCount: mysqlReady ? operations.length : Math.max(operations.length, 1)
   };
 }
 
@@ -5186,7 +5273,7 @@ async function readPackageRepositoryUrl() {
 
 async function readPackageMetadata() {
   try {
-    const packageJson = JSON.parse(await fs.readFile(path.join(app.getAppPath(), "package.json"), "utf8")) as {
+    const packageJson = parseJsonText(await fs.readFile(path.join(app.getAppPath(), "package.json"), "utf8")) as {
       repository?: string | { url?: string };
       aistudy?: {
         updateRepository?: string;
@@ -6958,7 +7045,7 @@ function getNodeTitle(node: SimpleMindMapNode, fallback: string) {
 function getMindMapRootTitleFromPayloadJson(payloadJson: string | null | undefined) {
   if (!payloadJson) return "";
   try {
-    const snapshot = normalizeMindMapSnapshot(JSON.parse(payloadJson));
+    const snapshot = normalizeMindMapSnapshot(parseJsonText(payloadJson));
     return getNodeTitle(snapshot.root, "");
   } catch {
     return "";
@@ -7101,7 +7188,7 @@ async function readMindMapDocument(courseIdValue: unknown): Promise<MindMapDocum
       [map.currentSnapshotId, map.id]
     );
     if (rows[0]?.payloadJson) {
-      snapshot = normalizeMindMapSnapshot(JSON.parse(rows[0].payloadJson));
+      snapshot = normalizeMindMapSnapshot(parseJsonText(rows[0].payloadJson));
     }
   }
 
@@ -7339,7 +7426,7 @@ async function writeMindMapDocument(input: unknown): Promise<MindMapDocument> {
       courseId: request.courseId,
       mapId,
       title,
-      snapshot: JSON.parse(payloadJson) as MindMapSnapshot,
+      snapshot: parseJsonText(payloadJson) as MindMapSnapshot,
       updatedAt,
       nodeCount: nodes.length
     };
@@ -7610,7 +7697,7 @@ async function readKnowledgeDocument(input: unknown): Promise<KnowledgeDocument 
       [document.currentSnapshotId, document.id]
     );
     if (rows[0]?.payloadJson) {
-      snapshot = normalizeKnowledgeDocumentSnapshot(JSON.parse(rows[0].payloadJson));
+      snapshot = normalizeKnowledgeDocumentSnapshot(parseJsonText(rows[0].payloadJson));
     }
   }
 
@@ -7719,7 +7806,7 @@ async function writeKnowledgeDocument(input: unknown): Promise<KnowledgeDocument
       nodeId: request.nodeId,
       documentId,
       title,
-      snapshot: JSON.parse(payloadJson) as KnowledgeDocumentSnapshot,
+      snapshot: parseJsonText(payloadJson) as KnowledgeDocumentSnapshot,
       updatedAt,
       byteSize,
       hasContent
@@ -8647,7 +8734,7 @@ async function consumeMcpEventFile(filePath: string) {
   if (!filePath.toLowerCase().endsWith(".json")) return;
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    const change = normalizeMcpDataChangeEvent(JSON.parse(raw));
+    const change = normalizeMcpDataChangeEvent(parseJsonText(raw));
     if (!change || handledMcpEventIds.has(change.id)) return;
     handledMcpEventIds.add(change.id);
     if (handledMcpEventIds.size > 500) {
@@ -8913,7 +9000,7 @@ async function readLocalTextbookStore(courseId: string, mindMapId: string): Prom
   const filePath = getTextbookStoreFilePath(courseId, mindMapId);
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    const store = normalizeTextbookStore(JSON.parse(raw), { courseId, mindMapId });
+    const store = normalizeTextbookStore(parseJsonText(raw), { courseId, mindMapId });
     rememberTextbookAssetPaths(store.assets);
     return store;
   } catch (error) {

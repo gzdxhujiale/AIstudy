@@ -1,6 +1,6 @@
 {
   "name": "aistudy",
-  "version": "0.1.75",
+  "version": "0.1.76",
   "description": "AIstudy desktop shell.",
   "author": "SnowLove0303",
   "private": false,
@@ -23,7 +23,7 @@
     "build": "node scripts/qa/validate-safe-dependencies.mjs && tsc && vite build && node scripts/build/prepare-renderer-vendors.mjs && tsc -p tsconfig.electron.json",
     "qa:error-codes": "npm run build && node scripts/qa/validate-error-codes.mjs",
     "pack": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist",
-    "dist": "npm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
+    "dist": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/ensure-installer-resources.ps1 && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
     "dist:oneclick": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/close-and-dist.ps1",
     "shortcuts:refresh": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/refresh-shortcuts.ps1",
     "setup:doctor": "node scripts/setup/check-dev-environment.mjs",
@@ -102,7 +102,10 @@
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
+      "include": "build/installer/installer.nsh",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "createDesktopShortcut": "always",

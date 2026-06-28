@@ -171,6 +171,51 @@ function Remove-PortableRuntimeDataFromAppOutDir {
   }
 }
 
+function Assert-CleanInstallerSource {
+  param([string] $AppOutDir)
+
+  $appOutFullPath = [System.IO.Path]::GetFullPath($AppOutDir)
+  $releaseFullPath = [System.IO.Path]::GetFullPath($releaseRoot)
+  if (-not $appOutFullPath.StartsWith($releaseFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to inspect installer source outside release: $appOutFullPath"
+  }
+
+  $forbiddenRelativePaths = @(
+    "AIstudyPublicData",
+    "AIstudyUserData",
+    "mysql.config.json"
+  )
+
+  $violations = @()
+  foreach ($relativePath in $forbiddenRelativePaths) {
+    $candidate = Join-Path $appOutFullPath $relativePath
+    if (Test-Path -LiteralPath $candidate) {
+      $violations += $candidate
+    }
+  }
+
+  $forbiddenFileNames = @(
+    "courses.json",
+    "course-pending-operations.json",
+    "chrome-ports.json",
+    "mysql.config.json"
+  )
+
+  $forbiddenFiles = Get-ChildItem -LiteralPath $appOutFullPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+    $forbiddenFileNames -contains $_.Name
+  }
+  foreach ($file in $forbiddenFiles) {
+    $violations += $file.FullName
+  }
+
+  if ($violations.Count -gt 0) {
+    $message = "Installer source contains runtime data and must not be packaged:`n" + (($violations | Sort-Object -Unique) -join "`n")
+    throw $message
+  }
+
+  Write-Host "[AIstudy] Clean installer source guard passed."
+}
+
 Set-Location $projectRoot
 $npmCache = Join-Path $cacheRoot "npm"
 $electronCache = Join-Path $cacheRoot "electron"
@@ -238,6 +283,7 @@ try {
       }
 
       Remove-PortableRuntimeDataFromAppOutDir
+      Assert-CleanInstallerSource $prepackagedDir
       Write-Host "[AIstudy] Rebuilding installer from cleaned app directory..."
       & npx.cmd electron-builder --win nsis --prepackaged $prepackagedDir
       $exitCode = $LASTEXITCODE

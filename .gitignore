@@ -7,6 +7,9 @@ artifacts/
 .tmp/
 .codex-tmp/
 .runtime/
+mysql.config.json
+build/installer/mysql-*.zip
+build/installer/vc_redist*.exe
 .vite/
 *.log
 *.user

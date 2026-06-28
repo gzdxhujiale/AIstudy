@@ -8,7 +8,7 @@
 - GitHub 仓库：`https://github.com/SnowLove0303/AIstudy-Public.git`
 - 应用名：`AIstudy`
 - 当前包名：`aistudy`
-- 当前版本号：`0.1.75`，以 `package.json` 的 `version` 为准
+- 当前版本号：`0.1.76`，以 `package.json` 的 `version` 为准
 - 公开版定位：开发端、发布端、纯净版基线
 - 自用版仓库：`F:\XIANGMU\AIstudy`
 
@@ -16,17 +16,17 @@
 
 ## 1.1 当前接手状态
 
-截至 2026-06-28，本公开版已从 MCP/知识库主链路扩展到教材、考试和信息采集的完整应用壳：
+截至 2026-06-29，本公开版已从 MCP/知识库主链路扩展到教材、考试和信息采集的完整应用壳：
 
-- 最新安装包：`release\AIstudy-Setup-0.1.75.exe`
+- 最新安装包：`release\AIstudy-Setup-0.1.76.exe`
 - 最新免安装运行版：`release\win-unpacked\AIstudy.exe`
 - 最新更新摘要见：`docs/updates/INDEX.md`
 - 当前主要分支：`main`
 - 当前本地 HEAD 与远端 `origin/main` 一致，提交为 `1209a84 fix: isolate textbook page bindings`；`git rev-list --left-right --count "HEAD...@{u}"` 为 `0 0`。
 - 当前公开版已经具备课程/分区、思维导图、节点 Word 文档、教材 PDF 与节点笔记、题库考试、信息采集、AI 助手、Chrome 固定端口、MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、更新管理、错误日志、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层和右侧文档格式面板。
-- 最近一轮更新集中在纯净公开版默认隔离本机数据目录、未显式配置 MySQL 时避免读取本机旧数据库内容，并确保打包时排除本机运行数据目录。
+- 最近一轮更新集中在纯净公开版默认隔离本机数据目录、AIstudy 管理 MySQL 自动发现、打包源运行数据排除守卫、重复安装时 MySQL 端口解析幂等修复，以及未连接数据库时的课程侧栏状态提示。
 
-当前接手时工作区不是干净状态。`git status --short --branch` 显示 `main...origin/main`，并已有 `electron/main.ts`、`package.json`、`package-lock.json`、`scripts/package/close-and-dist.ps1`、`docs/updates/INDEX.md`、`docs/codex/CODEX_HANDOFF.md` 修改，均与 0.1.75 纯净公开版数据隔离和打包排除运行数据相关。接手者必须先确认这些改动归属，不要回滚或覆盖。
+当前接手时工作区不是干净状态。`git status --short --branch` 显示 `main...origin/main`，并已有 `electron/main.ts`、`package.json`、`package-lock.json`、`scripts/package/close-and-dist.ps1`、`docs/updates/INDEX.md`、`docs/codex/CODEX_HANDOFF.md` 修改，均与纯净公开版数据隔离、AIstudy 管理 MySQL 自动发现和打包排除运行数据相关。接手者必须先确认这些改动归属，不要回滚或覆盖。
 
 本轮功能遍历确认的主功能目录为 `assistant`、`chromePorts`、`collection`、`course`、`documents`、`exam`、`importer`、`mcp`、`mindmap`、`textbook`。其中 `textbook` 已真实接入主界面、preload、主进程、MySQL 和本地兜底，并已补齐模块 README。
 
@@ -109,7 +109,7 @@ AISTUDY_PUBLIC_DATA_ROOT
 AISTUDY_PUBLIC_RUNTIME_ROOT
 ```
 
-`AISTUDY_PUBLIC_USER_DATA_ROOT` 控制 Electron `userData`。开发模式默认是项目下 `.runtime\user-data`；生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyUserData`，否则优先落到 `F:\AIstudyPublicCleanData\user-data`。`AISTUDY_PUBLIC_DATA_ROOT` 控制业务数据根，生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyPublicData`，否则优先使用 `F:\AIstudyPublicCleanData`。生产包没有显式 `mysql.config.json` 或 `AISTUDY_PUBLIC_MYSQL_*` 环境变量时，不自动连接本机默认 MySQL，避免纯净安装读取旧 `aistudy_public` 数据库。
+`AISTUDY_PUBLIC_USER_DATA_ROOT` 控制 Electron `userData`。开发模式默认是项目下 `.runtime\user-data`；生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyUserData`，否则优先落到 `F:\AIstudyPublicCleanData\user-data`。`AISTUDY_PUBLIC_DATA_ROOT` 控制业务数据根，生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyPublicData`，否则优先使用 `F:\AIstudyPublicCleanData`。生产包没有显式 `mysql.config.json` 或 `AISTUDY_PUBLIC_MYSQL_*` 环境变量时，不自动连接任意本机默认 MySQL；只有发现 AIstudy 管理的 `%ProgramData%\AIstudy\mysql\my.ini` 时，才按固定 `aistudy_public` 连接并尝试短启动 `AIstudyMySQL` 服务。
 
 运行目录当前包含：
 
@@ -144,7 +144,9 @@ AIstudyPublicData/config/mysql.config.json
 
 用户安装 exe 后接自己的数据库。后续更新公开版安装包时，不应该覆盖用户的数据库连接、课程数据、文档快照、导图快照、错误日志和本地运行目录。
 
-MySQL 配置读取顺序是 exe 旁边 `mysql.config.json`、数据根 `config/mysql.config.json`、Electron `userData/mysql.config.json` 合并，再由环境变量覆盖连接四项。数据库名和表名仍固定，不从配置覆盖。
+MySQL 配置优先级从低到高是 AIstudy 管理服务 `%ProgramData%\AIstudy\mysql\my.ini`、`%ProgramData%\AIstudy\mysql.config.json`、`%ProgramData%\AIstudy\AIstudyPublicData\config\mysql.config.json`、`%ProgramData%\AIstudy\AIstudyUserData\mysql.config.json`、exe 旁边 `mysql.config.json`、数据根 `config/mysql.config.json`、Electron `userData/mysql.config.json`，最后由 `AISTUDY_PUBLIC_MYSQL_*` 环境变量覆盖连接四项。数据库名和表名仍固定，不从配置覆盖。
+
+纯净发行版原则：课程分区属于数据库正式数据，不应依赖打包目录里的本地 `courses.json` 镜像来呈现。`npm run dist:oneclick` 会在最终 NSIS 重打包前移除 `win-unpacked` 中的 `AIstudyPublicData`、`AIstudyUserData` 和运行期状态，并用守卫阻断 `courses.json`、`course-pending-operations.json`、`chrome-ports.json`、`mysql.config.json` 等文件进入安装源。安装后应自动检索本机可用的公开版数据库配置或 AIstudy 管理的本机数据库服务，并建立到固定 `aistudy_public` 的连接；如果数据库不可用，UI 必须明确这是本机镜像/本机模式，而不能让用户误以为数据库仍然连接。
 
 ## 4. 核心架构
 
@@ -282,7 +284,8 @@ textbook_notes
 课程和分区：
 
 - MySQL 是正式索引源。
-- 本地 `courses.json` 只是轻量镜像和降级副本。
+- 本地 `courses.json` 只是轻量镜像和降级副本，不能作为纯净发行版的初始数据源。
+- 分区、课程排序、折叠状态等入口索引原则上都应落在数据库里；纯净安装包里的初始分区/课程状态应为空，由安装后的本机数据库连接或用户真实数据恢复。
 - MySQL 写失败时，课程/分区命令进入 pending 队列，后续恢复时重放。
 - pending 队列支持 `course:create/rename/move/reorder/delete` 和 `section:create/rename/reorder/toggle/toggle-all/delete`；重放失败会保留剩余队列、递增 `retryCount` 并记录 `lastError`，不能直接丢弃。
 - 课程可生成 `locators/courses/{课程名}__{courseId}.aistudy-course.json`，用于外部工具稳定定位数据根、固定 MySQL 表和课程身份。
@@ -560,6 +563,7 @@ npm run dist:oneclick
 - 没有误动自用版。
 - 开发侧 docs/scripts 没进入打包产物。
 - 用户数据库和运行数据不会被安装包覆盖。
+- 纯净发行版安装包不包含 `AIstudyPublicData/state/courses.json`、`course-pending-operations.json`、教材本地兜底、Chrome profile、MySQL 配置或任何验证机运行数据；`dist:oneclick` 的纯净源守卫必须通过；新装应先通过本机数据库配置/服务建立连接，无法连接时再进入明确的本机空镜像模式。
 - 新功能对应模块 README 或主 README 已补。
 - 功能开发内容已同步或准备同步到 `AIstudy 全量功能架构`。
 - 如果打包发布，确认 `release\AIstudy-Setup-当前版本.exe` 与 `release\win-unpacked\AIstudy.exe` 均已更新。
@@ -567,16 +571,15 @@ npm run dist:oneclick
 - 如果使用 `npm run dist:oneclick`，打包后检查并恢复 `docs/updates/INDEX.md` 的真实更新摘要。
 - 发布前建议运行 `npm run github:sync:doctor`，确认 origin、upstream、ahead/behind、工作区、GitHub CLI 登录和 latest release 安装包资产状态。
 
-问题修复和正式发布的边界：
+开发线程权限边界：
 
-- 具体 bugfix 开发线程修完并完成基础验证后，可以直接打包产出用户可打开的真实改后版本，便于用户立刻验收修复效果。
-- bugfix 开发线程即使可以打包，也不得提交、推送、创建 GitHub Release、决定版本号或编写最终发布说明。
-- 主管线程负责真实功能验收；验收通过后，提交和推送由主管线程执行。
-- 版本号、更新摘要和发布记录口径仍由版本管理线程确认。
-- 发行版本线程后续用于公开发行包流程、异机反馈和发行资产管理，不再作为普通 bugfix 闭环里的默认打包负责人。
+- 后续开发线程默认拥有开发相关全权限。除 Codex 全局记忆和当次用户/主管明确任务要求外，不再额外限制开发线程能做的开发、验证、文档、脚本、打包、提交、推送或发布准备动作。
+- 开发线程做任何动作仍必须遵守全局记忆里的真实测试、GitHub 管理、VS Code 接管、C 盘占用限制、用户数据保护、凭据安全、需求不清先问清和不回滚他人改动等要求。
+- 版本管理、主管、审计和发行线程可以提供协作建议、验收或专项支持；除非用户或主管在具体任务中明确要求，否则这些角色不作为开发线程权限限制。
 
 ## 11. 最近版本记录
 
+- `0.1.76`：接入 AIstudy 管理 MySQL 自动发现和短启动，安装器 MySQL 配置改为 UTF-8 无 BOM 写入，修复重复安装时 `[mysqld]`/`[client]` 多端口解析导致的参数转换失败，并为 `dist:oneclick` 增加纯净安装源运行数据守卫。
 - `0.1.75`：纯净公开版默认隔离本机数据目录，并在未显式配置 MySQL 时避免读取本机旧数据库内容。
 - `0.1.74`：修复教材节点页段绑定状态隔离、已绑定锁定/取消重设，并清理教材 PDF 独立窗口残留。
 - `0.1.73`：修复教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化问题，并优化文档内 AI 小窗拖动体验。
@@ -697,7 +700,14 @@ electron/main.ts
 
 ## 14. 新线程培训与交接规则
 
-本线程的职责是维护交接文档和培训新 Codex 线程，不默认接管所有功能开发。其他线程完成开发后，应把真实变更、验证结果、未解决风险和是否已提交/推送反馈给本线程，由本线程更新本文件。
+本线程的职责是维护交接文档和培训新 Codex 线程，不默认接管所有功能开发。新线程交接提示只负责让线程具备完整项目理解和可开发能力，不再强制要求开发线程每次完成任务后回传固定清单。
+
+当前线程角色基线：
+
+- 原主开发线程 `019f02ed-8ce2-7903-a7fa-ce22cc391c18` 仅作历史参考，不再承接新开发、打包、提交、推送或发布任务。
+- 当前主开发线程是 `019f0dbe-a94b-77f0-bfde-ad062f667d03`，负责核心开发、bugfix、架构和数据边界落地。
+- 全权限开发线程 `019f0f28-a214-7c32-be2c-a0a4ef71ba8c` 可承担所有开发相关工作；除 Codex 全局记忆和当次任务明确要求外，不额外限制其开发、验证、打包、提交、推送或发布准备动作。
+- 版本管理、主管、审计和发行线程保留各自专项职责，但不默认限制开发线程权限；如需限制，以用户或主管当前明确指令为准。
 
 需要开新线程时，交接提示至少包含：
 
@@ -706,8 +716,7 @@ electron/main.ts
 - 全量遍历要求：新线程必须先用 VS Code 打开项目，并对 `F:\XIANGMU\AIstudy-public` 整个文件夹做 1-3 轮全量遍历；至少用 `rg --files` 或等效方式扫过 docs、scripts、electron、src/renderer/features、release、配置和关键入口，达到能直接开发和判断风险的程度后再进入具体任务。
 - 必读文件：本文件、`README.md`、`docs/README.md`、`docs/ARCHITECTURE.md`、`docs/功能规划/README.md`、目标模块 README、相关主进程/preload/renderer 入口。
 - 必跑验证：按任务选择 `npm run setup:doctor`、`npm run build`、`npm run qa:error-codes`、`npm run dist:oneclick`、`npm run github:sync:doctor`。
-- bugfix 打包边界：如果新线程负责具体问题修复，修完并完成基础验证后可以打包出用户可打开的真实改后版本；但不得提交、推送、创建 GitHub Release、决定版本号或发布说明。主管线程负责验收和提交推送，版本管理线程负责版本号、更新摘要和发布记录口径。
-- 交付回传：改了哪些文件、验证命令结果、是否涉及用户数据/打包/快捷方式/GitHub 发布、交接文档是否需要同步更新。
+- 开发权限边界：开发线程除 Codex 全局记忆和当次任务明确要求外，不做额外权限限制；可以根据任务需要完成开发、验证、文档同步、脚本维护、打包、提交、推送或发布准备。
 
 新线程接手前必须先读本文件并完成全项目遍历，不要凭旧记忆或局部 diff 改代码；功能开发完成后，如果架构、数据边界、发布流程、VS Code 接管方式或模块 README 发生变化，要先更新本文件，再交付。
 
