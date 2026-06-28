@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Resolve-Path (Join-Path $scriptDir "..\..")
 $releaseRoot = Join-Path $projectRoot "release"
+$shortcutRefreshScript = Join-Path $scriptDir "refresh-shortcuts.ps1"
 $releasePrefix = (Join-Path $projectRoot "release-").ToLowerInvariant()
 $cacheRoot = Join-Path $projectRoot ".tmp\build-cache"
 $portableDataDir = Join-Path $releaseRoot "win-unpacked\AIstudyPublicData"
@@ -201,6 +202,14 @@ try {
 if ($exitCode -ne 0) {
   Write-Host "[AIstudy] Packaging failed with exit code $exitCode."
   exit $exitCode
+}
+
+$runtimeExe = Join-Path $releaseRoot "win-unpacked\AIstudy.exe"
+Write-Host "[AIstudy] Refreshing desktop and start-menu shortcuts..."
+& $shortcutRefreshScript -RuntimeExe $runtimeExe
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "[AIstudy] Shortcut refresh failed with exit code $LASTEXITCODE."
+  exit $LASTEXITCODE
 }
 
 Write-Host ("[AIstudy] Done: release\AIstudy-Setup-{0}.exe" -f $appVersion)

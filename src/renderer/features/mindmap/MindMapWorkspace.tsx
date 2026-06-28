@@ -22,6 +22,7 @@ import {
 import { MindMapCanvas, type MindMapCanvasHandle } from "./MindMapCanvas";
 import { MindMapTextFormatToolbar } from "./MindMapTextFormatToolbar";
 import { KnowledgeDocumentWorkspace } from "../documents/KnowledgeDocumentWorkspace";
+import { TextbookWorkspace } from "../textbook/TextbookWorkspace";
 import { drainBeforeCloseSaves, registerBeforeCloseSave } from "../../lib/saveDrain";
 import { deleteLocalSnapshot, readLocalSnapshot, writeLocalSnapshot } from "../../lib/localSnapshotStore";
 import {
@@ -54,7 +55,7 @@ import type {
   MindMapTextFormatPatch
 } from "./mindMapTypes";
 
-export type WorkspaceEditorMode = "mindmap" | "word";
+export type WorkspaceEditorMode = "mindmap" | "word" | "textbook";
 
 export type WorkspaceModeChangeRequest = {
   mode: WorkspaceEditorMode;
@@ -954,7 +955,7 @@ export function MindMapWorkspace({
     let isCancelled = false;
 
     async function changeMode() {
-      if (modeChangeRequest?.mode === "word") {
+      if (modeChangeRequest?.mode !== "mindmap") {
         await saveNow();
       }
       if (!isCancelled && modeChangeRequest) {
@@ -1291,7 +1292,7 @@ export function MindMapWorkspace({
         />
       ) : null}
 
-      <div className="mindmap-canvas-retained" aria-hidden={editorMode === "word" ? "true" : undefined}>
+      <div className="mindmap-canvas-retained" aria-hidden={editorMode !== "mindmap" ? "true" : undefined}>
         <MindMapCanvas
           key={canvasKey}
           ref={canvasRef}
@@ -1316,6 +1317,15 @@ export function MindMapWorkspace({
           detailPaneMode={documentDetailPaneMode}
           onOpenFormatPane={onOpenDocumentFormatPane}
           onCloseFormatPane={onCloseDocumentFormatPane}
+        />
+      ) : editorMode === "textbook" ? (
+        <TextbookWorkspace
+          courseId={courseId}
+          mindMapId={mapId}
+          selectedNode={selectedNode}
+          nodeSelectionRequest={nodeSelectionRequest}
+          outline={outline}
+          onNodeSelect={selectDocumentNode}
         />
       ) : (
       <div className="mindmap-status-strip">

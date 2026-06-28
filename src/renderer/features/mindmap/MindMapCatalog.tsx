@@ -6,9 +6,15 @@ type MindMapCatalogProps = {
   items: MindMapOutlineItem[];
   selectedNodeId: string | null;
   resetKey: string;
+  collapseRequest?: MindMapCatalogCollapseRequest | null;
   onNodeSelect?: (item: MindMapOutlineItem) => void;
   onNodeDelete?: (item: MindMapOutlineItem) => void;
   onNodeCopyDocumentPath?: (item: MindMapOutlineItem) => Promise<void> | void;
+};
+
+export type MindMapCatalogCollapseRequest = {
+  collapsed: boolean;
+  nonce: number;
 };
 
 type CatalogContextMenuState = {
@@ -102,10 +108,11 @@ function renderCatalogItems(items: MindMapOutlineItem[], options: CatalogRenderO
   );
 }
 
-export function MindMapCatalog({ items, selectedNodeId, resetKey, onNodeSelect, onNodeDelete, onNodeCopyDocumentPath }: MindMapCatalogProps) {
+export function MindMapCatalog({ items, selectedNodeId, resetKey, collapseRequest, onNodeSelect, onNodeDelete, onNodeCopyDocumentPath }: MindMapCatalogProps) {
   const [collapsedPaths, setCollapsedPaths] = React.useState<Set<string>>(() => collectDefaultCollapsedPaths(items));
   const [contextMenu, setContextMenu] = React.useState<CatalogContextMenuState | null>(null);
   const knownCollapsiblePathsRef = React.useRef<Set<string>>(collectCollapsiblePaths(items));
+  const collapseRequestNonceRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     const validPaths = collectCollapsiblePaths(items);
@@ -140,6 +147,13 @@ export function MindMapCatalog({ items, selectedNodeId, resetKey, onNodeSelect, 
       window.removeEventListener("scroll", closeMenu, true);
     };
   }, [contextMenu]);
+
+  React.useEffect(() => {
+    if (!collapseRequest || collapseRequest.nonce === collapseRequestNonceRef.current) return;
+    collapseRequestNonceRef.current = collapseRequest.nonce;
+    setCollapsedPaths(collapseRequest.collapsed ? collectCollapsiblePaths(items) : new Set());
+    setContextMenu(null);
+  }, [collapseRequest, items]);
 
   React.useEffect(() => {
     const validPaths = collectCollapsiblePaths(items);

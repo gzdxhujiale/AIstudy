@@ -1367,7 +1367,7 @@ export function KnowledgeDocumentWorkspace({
     });
   }, [aiPanelSize, readSelectedText]);
 
-  const startAssistantPanelDrag = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+  const startAssistantPanelDrag = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (!aiContextMenu || event.button !== 0) return;
 
     event.preventDefault();

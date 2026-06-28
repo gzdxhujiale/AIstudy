@@ -16,7 +16,7 @@ Keep this file synchronized with `electron/mcp/controller.ts`, `electron/mcp/rem
 - `read_current_mindmap`
 - `search_nodes`
 - `list_node_documents`
-- `read_node_document`
+- `read_node_document`: returns `text`/`textClean` for human-readable content, `textRaw` for audit, and `document.snapshot` as editor JSON for advanced tooling.
 
 ## Course And Section Edits
 

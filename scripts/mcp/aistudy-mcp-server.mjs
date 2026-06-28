@@ -1746,6 +1746,28 @@ const DOCUMENT_TEXT_CONTAINER_KEYS = new Set([
 
 const DOCUMENT_TEXT_LOSS_WARNING_THRESHOLD = 32;
 
+const DOCUMENT_TEXT_METADATA_CONTAINER_KEYS = new Set([
+  "style",
+  "styles",
+  "attrs",
+  "attributes",
+  "props",
+  "format",
+  "formats",
+  "marks",
+  "decorations",
+  "metadata",
+  "meta",
+  "options",
+  "config",
+  "configs",
+  "settings",
+  "theme",
+  "selection",
+  "cursor",
+  "layout"
+]);
+
 const DOCUMENT_TEXT_SKIP_KEYS = new Set([
   "schemaVersion",
   "editor",
@@ -1768,6 +1790,8 @@ const DOCUMENT_TEXT_SKIP_KEYS = new Set([
   "href",
   "url",
   "colgroup",
+  "title",
+  "separator",
   "width",
   "height",
   "style",
@@ -1779,6 +1803,36 @@ const DOCUMENT_TEXT_SKIP_KEYS = new Set([
   "uuid",
   "graffiti"
 ]);
+
+const DOCUMENT_TEXT_NOISE_LINE_PATTERN = /^(?:title|list|ol|ul|separator|paragraph|text|rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)|rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0|1|0?\.\d+)\s*\)|#[0-9a-f]{3,8})$/i;
+
+function isDocumentTextNoiseLine(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (DOCUMENT_TEXT_NOISE_LINE_PATTERN.test(text)) return true;
+  return /^(?:type|style|listStyle|color|backgroundColor|borderColor)\s*[:=]\s*(?:title|list|ol|ul|separator|rgb\(|rgba\(|#[0-9a-f])/i.test(text);
+}
+
+function cleanExtractedDocumentText(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter((line) => !isDocumentTextNoiseLine(line))
+    .join("\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function createDocumentTextNoiseStats(rawText, cleanText) {
+  const rawTextCleanLength = cleanText.length;
+  const textNoiseRemovedLength = Math.max(0, rawText.length - cleanText.length);
+  const textNoiseWarning = textNoiseRemovedLength > 0
+    ? `Document text cleanup removed ${textNoiseRemovedLength} characters of editor metadata noise.`
+    : null;
+  return { rawTextCleanLength, textNoiseRemovedLength, textNoiseWarning };
+}
 
 function stripMarkdownHeading(line) {
   return String(line || "").replace(/^#{1,6}\s+/, "").replace(/\*\*/g, "").trim();
@@ -2057,12 +2111,12 @@ function extractDocumentText(value) {
   if (!value || typeof value !== "object") return "";
   let text = typeof value.value === "string" ? value.value : "";
   for (const [key, child] of Object.entries(value)) {
-    if (key === "value" || DOCUMENT_TEXT_SKIP_KEYS.has(key)) continue;
+    if (key === "value" || DOCUMENT_TEXT_SKIP_KEYS.has(key) || DOCUMENT_TEXT_METADATA_CONTAINER_KEYS.has(key)) continue;
     if (DOCUMENT_TEXT_CONTAINER_KEYS.has(key) || Array.isArray(child)) {
       text += extractDocumentText(child);
       continue;
     }
-    if (child && typeof child === "object" && ("value" in child || "content" in child || "main" in child)) {
+    if (child && typeof child === "object" && ("content" in child || "main" in child)) {
       text += extractDocumentText(child);
     }
   }
@@ -2220,12 +2274,18 @@ async function readNodeDocument(runtime, args) {
       nodeId: target.nodeId,
       document: null,
       text: "",
+      textClean: "",
       textRaw: "",
       textNormalized: "",
+      textNormalizedClean: "",
       rawTextLength: 0,
+      rawTextCleanLength: 0,
       normalizedTextLength: 0,
       lostTextLength: 0,
-      warning: null
+      textNoiseRemovedLength: 0,
+      textNoiseWarning: null,
+      warning: null,
+      readingGuidance: "Use text/textClean for human-readable content. document.snapshot is editor JSON for advanced tooling."
     };
   }
   const [rows] = await runtime.pool.execute(
@@ -2238,7 +2298,10 @@ async function readNodeDocument(runtime, args) {
   const rawText = extractDocumentText(rawSnapshot?.content || "");
   const snapshot = rawSnapshot ? normalizeDocumentSnapshot(rawSnapshot) : null;
   const normalizedText = extractDocumentText(snapshot?.content || "");
+  const textClean = cleanExtractedDocumentText(rawText);
+  const textNormalizedClean = cleanExtractedDocumentText(normalizedText);
   const textIntegrity = createDocumentTextIntegrity(rawText, normalizedText);
+  const textNoise = createDocumentTextNoiseStats(rawText, textClean);
   const document = snapshot ? {
     courseId: target.course.id,
     mindMapId: target.mindMapId,
@@ -2255,10 +2318,14 @@ async function readNodeDocument(runtime, args) {
     mindMapId: target.mindMapId,
     nodeId: target.nodeId,
     document,
-    text: rawText,
+    text: textClean,
+    textClean,
     textRaw: rawText,
     textNormalized: normalizedText,
-    ...textIntegrity
+    textNormalizedClean,
+    ...textIntegrity,
+    ...textNoise,
+    readingGuidance: "Use text/textClean for human-readable content. document.snapshot is editor JSON for advanced tooling."
   };
 }
 
@@ -2796,6 +2863,7 @@ if (isMainModule) {
 }
 
 export {
+  cleanExtractedDocumentText,
   createDocumentTextIntegrity,
   extractDocumentText,
   normalizeDocumentSnapshot,

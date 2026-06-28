@@ -2,11 +2,14 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertCircle,
+  BookOpen,
   Bot,
   Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ChevronsDown,
+  ChevronsRight,
   ClipboardList,
   Download,
   ExternalLink,
@@ -32,7 +35,7 @@ import { courseApi } from "./features/course/courseService";
 import type { Course, CourseSection, CourseStore, CourseSyncStatus } from "./features/course/courseTypes";
 import { ExamWorkspace } from "./features/exam/ExamWorkspace";
 import { McpControlPanel } from "./features/mcp/McpControlPanel";
-import { MindMapCatalog } from "./features/mindmap/MindMapCatalog";
+import { MindMapCatalog, type MindMapCatalogCollapseRequest } from "./features/mindmap/MindMapCatalog";
 import {
   formatMindMapShortcutFromEvent,
   MIND_MAP_BRANCH_SHORTCUTS,
@@ -50,6 +53,7 @@ import {
   type WorkspaceNodeSelectionRequest
 } from "./features/mindmap/MindMapWorkspace";
 import type { MindMapOutlineItem, MindMapSelectedNode } from "./features/mindmap/mindMapTypes";
+import { TextbookPdfWindow } from "./features/textbook/TextbookPdfWindow";
 import { startCoreFeatureWarmup } from "./lib/performanceWarmup";
 import { drainBeforeCloseSaves } from "./lib/saveDrain";
 import "./styles.css";
@@ -886,11 +890,13 @@ function App() {
   const [modeChangeRequest, setModeChangeRequest] = React.useState<WorkspaceModeChangeRequest | null>(null);
   const [nodeSelectionRequest, setNodeSelectionRequest] = React.useState<WorkspaceNodeSelectionRequest | null>(null);
   const [nodeDeletionRequest, setNodeDeletionRequest] = React.useState<WorkspaceNodeDeletionRequest | null>(null);
+  const [catalogCollapseRequest, setCatalogCollapseRequest] = React.useState<MindMapCatalogCollapseRequest | null>(null);
   const [activeSection, setActiveSection] = React.useState<AppSection>("knowledge");
   const [isLibraryPaneCollapsed, setIsLibraryPaneCollapsed] = React.useState(false);
   const [isCatalogPaneCollapsed, setIsCatalogPaneCollapsed] = React.useState(false);
   const [detailPaneMode, setDetailPaneMode] = React.useState<DetailPaneMode>("catalog");
   const [externalContentRevision, setExternalContentRevision] = React.useState(0);
+  const catalogCollapseNonceRef = React.useRef(0);
 
   const openDocumentFormatPane = React.useCallback(() => {
     setDetailPaneMode("format");
@@ -1055,6 +1061,11 @@ function App() {
 
   function toggleAllCourseSections(collapsed: boolean) {
     void runCourseStoreCommand(() => courseApi.toggleAllSections(collapsed));
+  }
+
+  function toggleCatalogTree(collapsed: boolean) {
+    catalogCollapseNonceRef.current += 1;
+    setCatalogCollapseRequest({ collapsed, nonce: catalogCollapseNonceRef.current });
   }
 
   function deleteCourseSection(section: CourseSection) {
@@ -1290,6 +1301,15 @@ function App() {
                 <FileText size={15} />
                 <span>文档</span>
               </button>
+              <button
+                type="button"
+                className={workspaceEditorMode === "textbook" ? "active" : ""}
+                onClick={() => requestWorkspaceMode("textbook")}
+                disabled={!activeCourse}
+              >
+                <BookOpen size={15} />
+                <span>教材</span>
+              </button>
             </div>
           </div>
 
@@ -1319,6 +1339,18 @@ function App() {
             <div>
               <h2>{workspaceEditorMode === "word" && detailPaneMode === "format" ? "排版" : "目录"}</h2>
             </div>
+            {!(workspaceEditorMode === "word" && detailPaneMode === "format") && mindMapOutline.length > 0 ? (
+              <div className="catalog-tree-toolbar" aria-label="目录视图">
+                <button type="button" onClick={() => toggleCatalogTree(false)}>
+                  <ChevronsDown size={14} />
+                  <span>展开</span>
+                </button>
+                <button type="button" onClick={() => toggleCatalogTree(true)}>
+                  <ChevronsRight size={14} />
+                  <span>收叠</span>
+                </button>
+              </div>
+            ) : null}
             {workspaceEditorMode === "word" ? (
               <div className="detail-mode-switch" aria-label="右侧面板切换">
                 <button
@@ -1349,6 +1381,7 @@ function App() {
                 items={mindMapOutline}
                 selectedNodeId={selectedMindMapNode.id}
                 resetKey={activeCourseId ?? ""}
+                collapseRequest={catalogCollapseRequest}
                 onNodeSelect={selectCatalogNode}
                 onNodeCopyDocumentPath={copyCatalogNodeDocumentPath}
                 onNodeDelete={deleteCatalogNode}
@@ -1428,8 +1461,11 @@ function App() {
   );
 }
 
+const routeParams = new URLSearchParams(window.location.search);
+const rootContent = routeParams.get("view") === "textbook-pdf" ? <TextbookPdfWindow /> : <App />;
+
 createRoot(document.getElementById("root")!).render(
   <AppErrorBoundary>
-    <App />
+    {rootContent}
   </AppErrorBoundary>
 );

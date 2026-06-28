@@ -24,7 +24,7 @@ type AiAssistantPanelProps = {
   compact?: boolean;
   initialInput?: string;
   storageKey?: string;
-  onDragHandlePointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onDragHandlePointerDown?: (event: React.PointerEvent<HTMLElement>) => void;
   onInitialInputConsumed?: () => void;
   onClose?: () => void;
   title?: string;
@@ -63,6 +63,7 @@ const DEFAULT_ASSISTANT_MESSAGES: AiChatMessage[] = [
 const ASSISTANT_STORAGE_PREFIX = "aistudy:assistant-chat:v1:";
 const MAX_PERSISTED_MESSAGES = 80;
 const MAX_PERSISTED_MESSAGE_CHARS = 8000;
+const ASSISTANT_HEADER_DRAG_IGNORE_SELECTOR = "button,input,textarea,select,a,[role='button'],.assistant-header-actions";
 
 type StoredAssistantSession = {
   version: 1;
@@ -76,6 +77,10 @@ function trimStoredMessage(message: AiChatMessage): AiChatMessage {
     ...message,
     content: message.content.slice(0, MAX_PERSISTED_MESSAGE_CHARS)
   };
+}
+
+function shouldIgnoreAssistantHeaderDrag(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest(ASSISTANT_HEADER_DRAG_IGNORE_SELECTOR));
 }
 
 function readStoredSession(storageKey: string): StoredAssistantSession | null {
@@ -227,13 +232,17 @@ export function AiAssistantPanel({
     await sendPrompt(message);
   }, [input, sendPrompt]);
 
+  const handleAssistantHeaderPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (!onDragHandlePointerDown || shouldIgnoreAssistantHeaderDrag(event.target)) return;
+    onDragHandlePointerDown(event);
+  }, [onDragHandlePointerDown]);
+
   return (
     <main className={compact ? "assistant-layout compact" : "assistant-layout"} aria-label="AI 聊天助手">
       <section className={compact ? "assistant-page compact" : "assistant-page"}>
-        <header className="assistant-header">
+        <header className="assistant-header" onPointerDown={onDragHandlePointerDown ? handleAssistantHeaderPointerDown : undefined}>
           <div
             className={onDragHandlePointerDown ? "assistant-title-block draggable" : "assistant-title-block"}
-            onPointerDown={onDragHandlePointerDown}
             title={onDragHandlePointerDown ? "拖动 AI 小窗" : undefined}
           >
             <div className="assistant-mark" aria-hidden="true">

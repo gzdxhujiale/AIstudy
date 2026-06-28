@@ -4,6 +4,10 @@
 
 标准 agent skill 位于 `.claude/skills/aistudy-mcp-access/SKILL.md`，索引和同步检查表位于 `.claude/skills/aistudy-mcp-access/references/`。后续 MCP 工具或权限更新时，必须同步更新该 skill。
 
+## read_node_document text fields
+
+Use `text` or `textClean` as the readable node-document body. Use `textRaw` only when auditing extraction behavior. `document.snapshot` is editor JSON and may contain style or structure metadata such as `title`, `list`, `ol`, `separator`, or `rgb(...)`; do not treat it as prose.
+
 ## 给 Codex/Claude Code 的 Skill 提示
 
 ```text

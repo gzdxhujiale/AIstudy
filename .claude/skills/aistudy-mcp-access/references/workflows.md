@@ -26,6 +26,8 @@ mcp_resolve_target({ courseName, nodeQuery })
 
 If multiple nodes match, present candidates or ask the user to choose.
 
+For `read_node_document`, use `text` or `textClean` as the readable document body. `document.snapshot` is the editor JSON payload and can contain style or structure metadata such as list types, colors, and separators.
+
 ## Edit A Mind Map
 
 ```text

@@ -77,6 +77,14 @@ contextBridge.exposeInMainWorld("aistudyExams", {
   save: (store: unknown) => invokeApp("exams:save", store)
 });
 
+contextBridge.exposeInMainWorld("aistudyTextbooks", {
+  load: (scope: unknown) => invokeApp("textbooks:load", scope),
+  save: (request: unknown) => invokeApp("textbooks:save", request),
+  choosePdf: (scope: unknown) => invokeApp("textbooks:choose-pdf", scope),
+  readPdf: (request: unknown) => invokeApp("textbooks:read-pdf", request),
+  openPdfWindow: (request: unknown) => invokeApp("textbooks:open-pdf-window", request)
+});
+
 contextBridge.exposeInMainWorld("aistudyMcp", {
   state: () => invokeApp("mcp:state"),
   setEnabled: (input: unknown) => invokeApp("mcp:set-enabled", input),

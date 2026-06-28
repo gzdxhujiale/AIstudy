@@ -8,7 +8,7 @@
 - GitHub 仓库：`https://github.com/SnowLove0303/AIstudy-Public.git`
 - 应用名：`AIstudy`
 - 当前包名：`aistudy`
-- 当前版本号：`0.1.68`，以 `package.json` 的 `version` 为准
+- 当前版本号：`0.1.73`，以 `package.json` 的 `version` 为准
 - 公开版定位：开发端、发布端、纯净版基线
 - 自用版仓库：`F:\XIANGMU\AIstudy`
 
@@ -16,23 +16,30 @@
 
 ## 1.1 当前接手状态
 
-最近一轮开发集中在 MCP、知识库主界面、思维导图工具和文档编辑器：
+截至 2026-06-28，本公开版已从 MCP/知识库主链路扩展到教材、考试和信息采集的完整应用壳：
 
-- 最新安装包：`release\AIstudy-Setup-0.1.68.exe`
+- 最新安装包：`release\AIstudy-Setup-0.1.73.exe`
 - 最新免安装运行版：`release\win-unpacked\AIstudy.exe`
 - 最新更新摘要见：`docs/updates/INDEX.md`
-- 当前主要分支：`codex/mcp-control-panel`
-- 当前公开版已经具备 MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、知识库本地路径复制、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层、右侧文档格式面板、端口管理和信息采集入口。
-- 最近一轮更新集中在一键打包、导图打开/切换性能、信息采集入口、右侧格式面板、端口支持和 ChatGPT CDP 发送稳定性。
+- 当前主要分支：`main`
+- 当前本地 HEAD 与远端 `origin/main` 一致，提交为 `abb69bf feat: persist exam papers in mysql`；`git rev-list --left-right --count "HEAD...@{u}"` 为 `0 0`。
+- 当前公开版已经具备课程/分区、思维导图、节点 Word 文档、教材 PDF 与节点笔记、题库考试、信息采集、AI 助手、Chrome 固定端口、MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、更新管理、错误日志、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层和右侧文档格式面板。
+- 最近一轮更新集中在教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化修复，以及文档内 AI 小窗拖动体验优化。
+
+当前接手时工作区不是干净状态。`git status --short --branch` 显示 `main...origin/main`，并已有 `electron/main.ts`、`electron/preload.cts`、`package.json`、`package-lock.json`、`scripts/mcp/aistudy-mcp-server.mjs`、打包脚本、MCP 文档、导图/文档/主界面样式等修改；同时有 `electron/textbookStore.ts`、`scripts/package/refresh-shortcuts.ps1`、`src/renderer/features/textbook/` 未跟踪。接手者必须先确认这些改动归属，不要回滚或覆盖。
+
+本轮功能遍历确认的主功能目录为 `assistant`、`chromePorts`、`collection`、`course`、`documents`、`exam`、`importer`、`mcp`、`mindmap`、`textbook`。其中 `textbook` 已真实接入主界面、preload、主进程、MySQL 和本地兜底，并已补齐模块 README。
+
+当前应用壳不是多页面路由，而是 `src/renderer/main.tsx` 的单壳多功能区：左侧主导航切换知识库、采集、考试、Chrome 端口和 AI 助手；知识库内部再切换导图、文档、教材；`?view=textbook-pdf` 是教材 PDF 独立窗口的特殊入口。关闭主窗口前会通过 `aistudyLifecycle.onBeforeClose` 统一 drain 导图、文档和教材笔记保存任务；MCP 外部数据变更会触发课程重读和导图/文档刷新修订号。
 
 接手时先注意：以 `git status --short --branch` 为准判断工作区状态；如果已有未提交改动，不要用 `git reset --hard` 或 checkout 回滚用户改动。
 
 ## 2. VS Code 接管方式
 
-优先打开公开版目录：
+优先打开公开版目录。Codex 拉起 VS Code 时必须复用统一且已登录的用户数据与扩展目录：
 
 ```powershell
-code F:\XIANGMU\AIstudy-public
+code --user-data-dir F:\AIAPP\Codex\vscode-user-data --extensions-dir F:\AIAPP\Codex\vscode-extensions F:\XIANGMU\AIstudy-public
 ```
 
 推荐在 VS Code 内开一个 PowerShell 终端，工作目录保持为：
@@ -40,6 +47,13 @@ code F:\XIANGMU\AIstudy-public
 ```powershell
 F:\XIANGMU\AIstudy-public
 ```
+
+本次接手验证记录（2026-06-28）：
+
+- VS Code 已用统一 `F:\AIAPP\Codex\vscode-user-data` 和 `F:\AIAPP\Codex\vscode-extensions` 打开 `AIstudy-public`。
+- 扩展目录中存在 `yutengjing.vscode-mcp-bridge`，日志显示已注册 `health`、`getDiagnostics`、`getSymbolLSPInfo`、`getReferences`、`executeCommand`、`openFiles`、`renameSymbol`、`listWorkspaces` 等服务，并启动本地 pipe；pipe 名每次启动可能变化。
+- 当前 Codex 线程未拿到可直接调用 VS Code MCP Bridge 的工具入口。新线程应先用可用工具搜索 VS Code/MCP Bridge；如果仍未暴露，就用 VS Code 打开项目、读取 VS Code 日志，并配合 `rg`、`git`、`npm` 完成代码盘点。
+- 系统 `python`、`node`、`npm` 可用，`npm run setup:doctor` 已通过 11 项检查。VS Code Python 扩展可能会扫描到旧的无效 Python 目标；只要项目脚本和 `setup:doctor` 正常，不要把该扩展扫描噪声误判为项目故障。
 
 接手后先跑：
 
@@ -90,8 +104,24 @@ AIstudyPublicData
 可以用环境变量覆盖：
 
 ```text
+AISTUDY_PUBLIC_USER_DATA_ROOT
 AISTUDY_PUBLIC_DATA_ROOT
 AISTUDY_PUBLIC_RUNTIME_ROOT
+```
+
+`AISTUDY_PUBLIC_USER_DATA_ROOT` 控制 Electron `userData`。开发模式默认是项目下 `.runtime\user-data`；生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyUserData`，否则优先落到 `F:\AIstudyPublicData\user-data`。`AISTUDY_PUBLIC_DATA_ROOT` 控制业务数据根，生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyPublicData`，否则优先使用 `F:\AIstudyPublicData`。
+
+运行目录当前包含：
+
+```text
+config                 MySQL 配置
+state                  courses.json、pending 队列、教材本地兜底等
+runtime                Chrome profile、端口状态、信息采集运行目录
+assets                 大文件和后续素材
+updates                更新安装包下载
+backups                备份
+logs                   日志
+locators\courses       课程 locator 文件
 ```
 
 公开版默认 MySQL：
@@ -114,6 +144,8 @@ AIstudyPublicData/config/mysql.config.json
 
 用户安装 exe 后接自己的数据库。后续更新公开版安装包时，不应该覆盖用户的数据库连接、课程数据、文档快照、导图快照、错误日志和本地运行目录。
 
+MySQL 配置读取顺序是 exe 旁边 `mysql.config.json`、数据根 `config/mysql.config.json`、Electron `userData/mysql.config.json` 合并，再由环境变量覆盖连接四项。数据库名和表名仍固定，不从配置覆盖。
+
 ## 4. 核心架构
 
 技术栈：
@@ -126,6 +158,7 @@ AIstudyPublicData/config/mysql.config.json
 - MySQL：正式结构化数据源
 - `simple-mind-map`：思维导图编辑器
 - `@hufe921/canvas-editor`：类 Word 文档编辑器
+- `pdfjs-dist`：教材 PDF 阅读
 
 关键入口：
 
@@ -137,6 +170,9 @@ electron/coreContract.ts
 src/renderer/main.tsx
 src/renderer/styles.css
 src/renderer/domain/coreContracts.ts
+electron/documentExport.ts
+electron/examStore.ts
+electron/textbookStore.ts
 ```
 
 核心设计基线见：
@@ -156,28 +192,100 @@ src/renderer/features/course        课程与分区
 src/renderer/features/mindmap       思维导图
 src/renderer/features/documents     Word 文档
 src/renderer/features/importer      导入器 UI 与解析
+src/renderer/features/textbook      教材 PDF、节点笔记、教材窗口
+src/renderer/features/exam          题库、试卷、考试、成绩
+src/renderer/features/collection    信息采集
 src/renderer/features/assistant     AI 助手
 src/renderer/features/chromePorts   Chrome 端口配置
 src/renderer/features/mcp           MCP 设置页与控制台 UI
-electron/mcp                        MCP 控制器、外部 stdio server、Tailscale 内网访问
+electron/mcp                        MCP 控制器、HTTP/Tailscale 远程访问
+scripts/mcp/aistudy-mcp-server.mjs  外部 stdio MCP server
+```
+
+当前代码规模，用于判断改动风险和拆分优先级：
+
+```text
+src/renderer/features/mindmap       10 files / 4017 lines
+src/renderer/features/exam           6 files / 3384 lines
+src/renderer/features/documents      4 files / 2659 lines
+src/renderer/features/textbook      10 files / 1657 lines
+src/renderer/features/course         4 files / 786 lines
+src/renderer/features/collection     2 files / 759 lines
+src/renderer/features/mcp            2 files / 719 lines
+src/renderer/features/assistant      2 files / 328 lines
+src/renderer/features/chromePorts    2 files / 199 lines
+electron/main.ts                     8537 lines
+scripts/mcp/aistudy-mcp-server.mjs   2714 lines
+electron/mcp/controller.ts           1296 lines
+electron/mcp/remoteAccess.ts         755 lines
 ```
 
 模块开发原则：
 
 - 新功能优先放进独立模块。
 - 模块有清晰 README，写清范围、用户流程、数据边界和后续扩展点。
+- 当前 `src/renderer/features/textbook/` 已接入主界面和主进程，并已补齐模块 README；后续继续开发教材功能时要同步维护该模块说明。
 - 渲染器不直接访问 MySQL。
-- 课程、分区、导图、文档、更新、错误日志都通过 preload 暴露的 IPC 能力访问主进程。
+- 课程、分区、导图、文档、考试、教材、MCP、Chrome 端口、信息采集、更新、错误日志都通过 preload 暴露的 IPC 能力访问主进程。
 - 不要把新逻辑继续塞进一个大组件里。
 - 新功能开发前，先查 GitHub 或成熟开源项目是否有可参考方案。
 
+preload 当前暴露的前端 API：
+
+```text
+aistudyWindow
+aistudyClipboard
+aistudyCourseLocators
+aistudyCourses
+aistudyCourseSections
+aistudyMindMaps
+aistudyKnowledgeDocuments
+aistudyExams
+aistudyTextbooks
+aistudyMcp
+aistudyChromePorts
+aistudyInformationCollection
+aistudyAssistant
+aistudyLifecycle
+aistudyUpdates
+aistudyErrorLogs
+aistudyRuntime
+```
+
+新增前端能力前必须先确认是否应该走现有 API；不要绕过 preload 直接访问主进程、文件系统或 MySQL。
+
 ## 6. 数据与存储逻辑
+
+固定 MySQL 表：
+
+```text
+course_management_courses
+knowledge_sections
+mind_maps
+mind_map_snapshots
+mind_map_nodes
+knowledge_documents
+knowledge_document_snapshots
+knowledge_assets
+knowledge_asset_links
+chrome_port_states
+app_error_logs
+exam_questions
+exam_papers
+exam_paper_sections
+exam_paper_questions
+exam_attempts
+textbook_assets
+textbook_notes
+```
 
 课程和分区：
 
 - MySQL 是正式索引源。
 - 本地 `courses.json` 只是轻量镜像和降级副本。
 - MySQL 写失败时，课程/分区命令进入 pending 队列，后续恢复时重放。
+- pending 队列支持 `course:create/rename/move/reorder/delete` 和 `section:create/rename/reorder/toggle/toggle-all/delete`；重放失败会保留剩余队列、递增 `retryCount` 并记录 `lastError`，不能直接丢弃。
+- 课程可生成 `locators/courses/{课程名}__{courseId}.aistudy-course.json`，用于外部工具稳定定位数据根、固定 MySQL 表和课程身份。
 
 思维导图：
 
@@ -195,15 +303,38 @@ electron/mcp                        MCP 控制器、外部 stdio server、Tailsc
 - 文档和导图通过 `(course_id, mind_map_id, node_id)` 绑定。
 - 文档编辑器使用宽纸张纵向阅读流，页面尺寸由当前工作区宽度计算；不要再把 page width/height 交换传入 `canvas-editor`，也不要在正常文档工作区使用 `PaperDirection.HORIZONTAL`。
 
+教材：
+
+- 教材模块按 `(course_id, mind_map_id)` 作用域读取和保存。
+- 教材资产写入 `textbook_assets`，节点笔记写入 `textbook_notes`，本地兜底文件位于 `state/textbooks/{courseId}__{mindMapId}.json`。
+- 教材 PDF 通过 `aistudy-pdf` 特权协议和独立 PDF 窗口打开，阅读器使用 `pdfjs-dist`。
+- PDF 阅读器按当前页附近懒渲染并缓存页面，支持页码、缩放、页数回写和独立窗口。
+- 教材笔记绑定到节点和页段，可保存 canvas-editor 富文本快照，关闭前会进入统一保存 drain，并可合并进对应节点 Word 文档。
+- 教材本地和 MySQL 双写采用 `updatedAt` 合并策略，资产按 `asset.id` 合并，笔记按 `textbookId + nodeId` 合并；旧版 `mindMapId === courseId` 作用域会自动迁移到真实导图作用域。
+- 当前教材文件路径仍保存在资产记录中，后续如果做跨机器迁移，要检查路径相对化和资产复制策略。
+
+考试：
+
+- 考试模块通过 `exams:load` / `exams:save` 读写。
+- 固定表包括 `exam_questions`、`exam_papers`、`exam_paper_sections`、`exam_paper_questions`、`exam_attempts`。
+- 题库、试卷、考试作答、自动评阅和成绩记录均按课程作用域隔离。
+- 题库可以从当前知识文档导入结构化题目，也支持 JSON 导入导出。
+- 试卷支持分区编排；作答超时会自动交卷，未答题交卷前会确认；评分是确定性规则，单选/多选/判断按答案集合匹配，简答按标准答案或关键词匹配。
+- `politics2026Seed.ts` 提供“2026 年考研政治真题”写入入口。维护考试模块时必须把它当真实内容资产处理，核对来源和命名，不能把测试题或示例题混进用户题库。
+
 MCP：
 
 - MCP 是独立模块，不依赖用户当前 UI 选中项。
 - 读取、搜索、编辑均应显式支持全库/指定知识库目标。
+- 客户端接入第一步必须调用 `mcp_get_started`；需要精确目标时先走 `mcp_resolve_target`，不要猜 `courseId` 或 `nodeId`。
+- MCP 暴露 `resources/list`、`resources/read`、`prompts/list`、`prompts/get`，用于外部 Codex/Claude Code 自读流程。
 - 远程内网访问使用 Tailscale Serve，只面向同一 tailnet，不做公网 Funnel。
 - 远程编辑权限必须细分，默认只读。
+- 远程权限组是 `course`、`mindmap`、`document`、`destructive`；未开启总编辑权限时，远程只开放读取和 Chrome 打开页面类工具。
 - 远程调用监控可开关，开启后记录外部设备调用工具、来源、状态、耗时和时间。
 - 内网访问开关状态需要持久化，应用重启后自动恢复 HTTP 服务和 Tailscale Serve。
 - 外部 MCP server 要懒加载运行状态，MySQL 不可用时不应导致 MCP 初始化失败；健康检查负责报告数据库和数据目录状态。
+- 文档写入工具有安全分工：`write_node_document` 只用于新文档或显式 `replaceExisting=true` 的全文覆盖；追加用 `append_node_document`；只整理样式用 `format_node_document`；简单全文样式用 `update_node_document_style`。
 
 资产：
 
@@ -215,6 +346,16 @@ MCP：
 - 前端只给用户看人话。
 - 主进程记录错误码、技术细节和上下文到 `app_error_logs`。
 - 设置页负责展示用户可读错误日志。
+
+信息采集：
+
+- 信息采集模块当前重点是 Bilibili 视频定位、视频信息、字幕/转写和写入已有知识文档。
+- 渲染器只呈现采集流程，实际平台请求、Chrome cookie、字幕下载、转写工具检测和写入由主进程处理。
+- 采集流程会先尝试 BV/短链解析、UP 搜索、WBI 签名接口、视频详情、公开字幕、简介文字稿，再根据工具状态进入字幕下载、音频下载和 Whisper 转写。
+- 写入 Word 前会把字幕/文字稿整理成标题、条目和段落，生成 `aistudy-word` 快照；目标节点已有内容时，前端会要求确认覆盖。
+- 缺少真实字幕、下载工具或转写工具时，不能用虚拟内容代替真实采集结果。
+- Bilibili cookie 来自固定端口 Chrome 的 CDP cookie 读取；若遇到 412、访问频繁或未登录，应该引导用户到端口管理打开 B站并保持登录。
+- 运行目录是 `runtime/information-collection/bilibili/{BV号}`，会保存 cookie 文件、下载字幕、官方文字稿、音频和转写中间产物；这些是运行缓存，不是知识库正式数据。
 
 ## 7. 核心功能使用方式
 
@@ -250,6 +391,18 @@ Word 文档：
 - 当前文档页宽应随编辑区宽度展开，避免右侧大空白和并排空白页。
 - 当前节点文档支持导出 `.docx`；导出走 Electron main 的文件选择和写入，不改变文档快照。
 
+教材：
+
+- 顶部切换到“教材”。
+- 支持选择 PDF 教材、打开独立阅读窗口、记录当前页、为当前节点写教材笔记。
+- 教材笔记可以合并到当前节点 Word 文档；合并前要保证当前节点、当前教材和当前笔记都是真实存在的。
+
+考试：
+
+- 左侧主导航进入“考试”。
+- 支持题库维护、从当前知识文档提题、题库 JSON 导入导出、试卷编排、考试作答、自动评阅和成绩查看。
+- 考试数据必须按当前课程隔离；不得把测试题或示例题伪装成用户真实题库。
+
 主界面布局：
 
 - 左侧知识库栏和右侧目录栏都有折叠按钮。
@@ -263,6 +416,9 @@ Word 文档：
 - 设置页包含环境检查、MCP 控制台、快捷键、更新管理、报错日志。
 - MCP 控制台采用纵向 Windows 设置风格；不要回到多列工程卡片样式。
 - 快捷键页存储导图分支排版快捷键，使用本地持久化。
+- 环境检查覆盖核心数据目录、本机恢复文件、MySQL、报错日志、Chrome、各固定端口、信息采集目录、`yt-dlp`、`ffmpeg`、`whisper` 和更新源。
+- 更新管理读取 GitHub latest Release，按 `aistudy.updateAssetPattern` 或默认 exe 规则选择安装包，支持镜像 URL、分块 Range 下载、暂停、继续、取消和下载完成后启动安装程序。
+- 报错日志页只展示用户可读消息、来源、编号、建议和是否可重试；技术细节留在主进程 `app_error_logs`。
 
 导入器：
 
@@ -270,6 +426,13 @@ Word 文档：
 - 支持拖拽 `.txt`、`.md`、`.markdown`、`.docx`。
 - 批量重文档导入走脚本 `scripts/importers/import-docx-to-node-documents.mjs`。
 - 导入后用 `scripts/importers/audit-docx-import.mjs` 审计内容和排版。
+
+信息采集：
+
+- 当前主导航有“采集”入口。
+- Bilibili 采集依赖固定 Chrome 端口登录态和真实视频/字幕/转写链路。
+- 采集结果写入已有课程、导图节点和文档链路，不单独制造孤立内容。
+- 本机工具检查包括 `yt-dlp`、`ffmpeg`、`whisper`。工具缺失时流程要停在对应步骤并给可读原因，不允许写入假转录。
 
 端口管理：
 
@@ -307,9 +470,28 @@ npm run dev                 # 原始 Vite + Electron 调试入口
 npm run build               # TypeScript + Vite + Electron 构建
 npm run qa:error-codes      # 构建并校验错误码体系
 npm run dist:oneclick       # 关闭旧实例并打包 NSIS 安装包
+npm run shortcuts:refresh   # 刷新桌面、开始菜单或固定栏快捷方式指向
 npm run import:docx         # 批量 DOCX 导入
 npm run audit:docx-import   # 导入结果审计
 npm run arch:knowledge:index # 生成架构知识库节点索引
+npm run github:sync:doctor  # 检查 GitHub 发布与版本同步状态
+npm run github:sync:fix     # 按脚本规则修复 GitHub 发布同步问题
+```
+
+`setup:doctor` 会检查 Node、npm、lockfile、node_modules、Electron 二进制、electron-builder、项目本地构建缓存和公开版 MySQL 模板。`setup:install` 和 `dist:oneclick` 都使用项目内 `.tmp\build-cache\npm`、`.tmp\build-cache\electron`、`.tmp\build-cache\electron-builder`，不要把构建缓存散落到 C 盘。
+
+`dist:oneclick` 当前闭环：
+
+```text
+关闭旧 packaged AIstudy 进程
+停止占用 release\win-unpacked\AIstudyPublicData 的运行进程
+保留 win-unpacked 里的便携运行数据
+清理旧 release 产物
+写入更新索引
+执行 npm run dist
+必要时用 prepackaged win-unpacked 重试 NSIS
+恢复便携运行数据
+刷新并校验桌面、开始菜单快捷方式
 ```
 
 Codex 接手文档同步：
@@ -380,10 +562,17 @@ npm run dist:oneclick
 - 新功能对应模块 README 或主 README 已补。
 - 功能开发内容已同步或准备同步到 `AIstudy 全量功能架构`。
 - 如果打包发布，确认 `release\AIstudy-Setup-当前版本.exe` 与 `release\win-unpacked\AIstudy.exe` 均已更新。
+- 如果打包发布，先杀死旧实例，打包后打开最新版本实际验证，并确认桌面、开始菜单、固定栏或其他快捷方式指向最新版本。
 - 如果使用 `npm run dist:oneclick`，打包后检查并恢复 `docs/updates/INDEX.md` 的真实更新摘要。
+- 发布前建议运行 `npm run github:sync:doctor`，确认 origin、upstream、ahead/behind、工作区、GitHub CLI 登录和 latest release 安装包资产状态。
 
 ## 11. 最近版本记录
 
+- `0.1.73`：修复教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化问题，并优化文档内 AI 小窗拖动体验。
+- `0.1.72`：一键打包生成安装包。
+- `0.1.71`：Word 导出按 AIstudy 文档快照格式生成。
+- `0.1.70`：标准化信息采集页 Bilibili 视频定位链路。
+- `0.1.69`：修复 Chrome 端口已保存登录状态持久化，并兼容 Bilibili API success code。
 - `0.1.68`：一键打包生成安装包。
 - `0.1.67`：优化主思维导图打开和切换速度，减少快照重复规范化，并在文档/导图切换时保留导图画布实例。
 - `0.1.66`：信息采集板块调整，仅保留导航入口。
@@ -442,13 +631,71 @@ src/renderer/features/documents/KnowledgeDocumentWorkspace.tsx
 src/renderer/features/documents/canvasEditorAdapter.ts
   canvas-editor 初始化、页面尺寸、格式命令和快照转换。
 
+src/renderer/features/textbook/
+  教材 PDF、节点教材笔记、PDF 阅读窗口和笔记合并到 Word 文档。
+
+src/renderer/features/exam/
+  题库、试卷、考试作答、自动评阅、成绩记录和 JSON 导入导出。
+
+src/renderer/features/collection/
+  信息采集页面，当前重点是 Bilibili 视频定位、字幕/转写和写入知识文档。
+
+src/renderer/features/assistant/
+  AI 助手页面和文档内紧凑面板，本地保存最近对话，发送由主进程固定端口自动化完成。
+
+src/renderer/features/chromePorts/
+  固定 Chrome 调试端口登录、状态检测、打开页面和短时登录监控。
+
+src/renderer/features/importer/
+  文档导入弹窗、DOCX/TXT/Markdown 解析和导入包结构。
+
 src/renderer/features/mcp/McpControlPanel.tsx
   MCP 设置页 UI、工具调试、内网访问、权限、监控。
 
 electron/mcp/
-  MCP 控制、远程访问、外部 stdio server。
+  MCP 控制器和 HTTP/Tailscale 远程访问。
+
+scripts/mcp/aistudy-mcp-server.mjs
+  外部 stdio MCP server。
+
+electron/preload.cts
+  渲染器安全 API 暴露层，负责把主进程能力包装给前端并清洗错误。
+
+electron/documentExport.ts
+  Word 文档快照导出 DOCX。
+
+electron/examStore.ts
+  考试模块 MySQL 表结构、读写和软删除同步。
+
+electron/textbookStore.ts
+  教材资产、节点教材笔记、PDF 资产记录和 MySQL/本地兜底读写。
 
 electron/main.ts
-  MySQL、课程/导图/文档 IPC、MCP 工具接入、更新、错误日志。
+  MySQL、课程/导图/文档/考试/教材 IPC、MCP 工具接入、Chrome 端口、信息采集、AI 助手、更新、错误日志。
 ```
+
+## 13. 当前查漏结果
+
+- `src/renderer/features/textbook/` 原本缺 README，本轮已补齐；后续教材功能变化要同步维护该 README。
+- `scripts/mcp/aistudy-mcp-server.mjs` 的 Chrome 端口平台列表缺少 `xiaohongshu`，而 `electron/main.ts`、`electron/mcp/controller.ts` 和 MCP 文档已经包含小红书 `9235`；后续改 MCP 端口能力时要先同步这里。
+- `docs/deployment-new-machine.md` 示例安装包版本仍是旧的 `0.1.14`，具体版本必须以 `package.json`、`docs/updates/INDEX.md` 和 `release/AIstudy-Setup-*.exe` 为准。
+- `docs/ARCHITECTURE.md` 的 “Current Implemented Surfaces” 标题仍停在 `0.1.68`，而当前包版本和更新索引已更新为 `0.1.73`；新线程判断版本时以 `package.json`、`docs/updates/INDEX.md`、`release/AIstudy-Setup-*.exe` 和本交接文档为准。
+- `electron/main.ts` 仍承载大量业务服务逻辑。继续扩展考试、教材、采集或 MCP 时，优先抽到独立 main-side service 文件，再通过 preload 暴露，不要继续扩大主进程巨文件。
+- 本轮检索了 `TODO/FIXME/placeholder/mock/sample/lorem/测试/占位/假/dummy/fake`。新增可疑业务假入口未发现；命中主要是历史研究文档里的 fixture/sample 计划、CSS/输入框 placeholder、导入报告 `sample` 字段，以及考试政治真题种子入口。后续如果改 UI，应继续遵守“不展示未接入真实能力的入口”。
+- 当前工作区已有用户/历史改动，交接者在任何提交、打包或发布前必须重新跑 `git status --short --branch` 并确认改动归属。
+
+## 14. 新线程培训与交接规则
+
+本线程的职责是维护交接文档和培训新 Codex 线程，不默认接管所有功能开发。其他线程完成开发后，应把真实变更、验证结果、未解决风险和是否已提交/推送反馈给本线程，由本线程更新本文件。
+
+需要开新线程时，交接提示至少包含：
+
+- 项目路径、GitHub 仓库、当前分支和 `git status --short --branch` 摘要。
+- 本次任务目标、禁止改动范围、已有未提交改动归属。
+- 全量遍历要求：新线程必须先用 VS Code 打开项目，并对 `F:\XIANGMU\AIstudy-public` 整个文件夹做 1-3 轮全量遍历；至少用 `rg --files` 或等效方式扫过 docs、scripts、electron、src/renderer/features、release、配置和关键入口，达到能直接开发和判断风险的程度后再进入具体任务。
+- 必读文件：本文件、`README.md`、`docs/README.md`、`docs/ARCHITECTURE.md`、`docs/功能规划/README.md`、目标模块 README、相关主进程/preload/renderer 入口。
+- 必跑验证：按任务选择 `npm run setup:doctor`、`npm run build`、`npm run qa:error-codes`、`npm run dist:oneclick`、`npm run github:sync:doctor`。
+- 交付回传：改了哪些文件、验证命令结果、是否涉及用户数据/打包/快捷方式/GitHub 发布、交接文档是否需要同步更新。
+
+新线程接手前必须先读本文件并完成全项目遍历，不要凭旧记忆或局部 diff 改代码；功能开发完成后，如果架构、数据边界、发布流程、VS Code 接管方式或模块 README 发生变化，要先更新本文件，再交付。
 

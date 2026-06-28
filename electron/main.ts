@@ -1,11 +1,12 @@
-import { app, BrowserWindow, clipboard, ipcMain, net, shell, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, net, protocol, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, watch, type FSWatcher } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import mysql, { type Connection, type Pool, type PoolConnection, type RowDataPacket } from "mysql2/promise";
 import { Socket } from "node:net";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
@@ -13,6 +14,19 @@ import { AISTUDY_CORE_CONTRACT } from "./coreContract.js";
 import { classifyAppError, createAppError, getAppErrorDefinition } from "./appErrors.js";
 import { exportKnowledgeDocumentDocx } from "./documentExport.js";
 import { ensureExamTables, readExamStoreFromMysql, writeExamStoreToMysql, type ExamMysqlRuntime } from "./examStore.js";
+import {
+  createTextbookAssetFromFile,
+  ensureTextbookTables,
+  normalizeTextbookStore,
+  readTextbookStoreFromMysql,
+  rememberTextbookAssetPaths,
+  resolveTextbookAssetPath,
+  textbookStoreHasContent,
+  writeTextbookStoreToMysql,
+  type TextbookAsset,
+  type TextbookMysqlRuntime,
+  type TextbookStore
+} from "./textbookStore.js";
 import { createMcpController } from "./mcp/controller.js";
 import { createMcpRemoteAccessController } from "./mcp/remoteAccess.js";
 
@@ -26,6 +40,20 @@ const INLINE_DATA_URL_PATTERN = /^data:[^;,]+(?:;[^,]+)*;base64,/i;
 const UPDATE_DOWNLOAD_CHUNK_SIZE_BYTES = 4 * 1024 * 1024;
 const UPDATE_DOWNLOAD_RETRY_LIMIT = 4;
 const UPDATE_DOWNLOAD_NET_TIMEOUT_MS = 120000;
+const TEXTBOOK_PDF_PROTOCOL = "aistudy-pdf";
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: TEXTBOOK_PDF_PROTOCOL,
+    privileges: {
+      standard: true,
+      secure: true,
+      corsEnabled: true,
+      supportFetchAPI: true,
+      stream: true
+    }
+  }
+]);
 
 function resolveAistudyUserDataRoot() {
   const configuredRoot = process.env.AISTUDY_PUBLIC_USER_DATA_ROOT?.trim() || process.env.AISTUDY_USER_DATA_ROOT?.trim();
@@ -289,6 +317,8 @@ type MysqlConfig = {
   examPaperSectionTable: string;
   examPaperQuestionTable: string;
   examAttemptTable: string;
+  textbookAssetTable: string;
+  textbookNoteTable: string;
 };
 
 type CourseRow = RowDataPacket & {
@@ -310,7 +340,7 @@ type CourseSectionRow = RowDataPacket & {
   updatedAt: Date | string;
 };
 
-type MysqlRuntime = ExamMysqlRuntime & {
+type MysqlRuntime = ExamMysqlRuntime & TextbookMysqlRuntime & {
   courseTable: string;
   courseSectionTable: string;
   mindMapTable: string;
@@ -322,6 +352,8 @@ type MysqlRuntime = ExamMysqlRuntime & {
   knowledgeAssetLinkTable: string;
   chromePortStateTable: string;
   errorLogTable: string;
+  textbookAssetTable: string;
+  textbookNoteTable: string;
 };
 
 const PUBLIC_MYSQL_DATABASE = "aistudy_public";
@@ -341,7 +373,9 @@ const PUBLIC_MYSQL_TABLES = {
   examPapers: "exam_papers",
   examPaperSections: "exam_paper_sections",
   examPaperQuestions: "exam_paper_questions",
-  examAttempts: "exam_attempts"
+  examAttempts: "exam_attempts",
+  textbookAssets: "textbook_assets",
+  textbookNotes: "textbook_notes"
 } as const;
 
 type AppErrorLogRow = RowDataPacket & {
@@ -3961,7 +3995,9 @@ async function createCourseLocatorFile(input: CourseLocatorRequest) {
         examPapers: mysqlConfig.examPaperTable,
         examPaperSections: mysqlConfig.examPaperSectionTable,
         examPaperQuestions: mysqlConfig.examPaperQuestionTable,
-        examAttempts: mysqlConfig.examAttemptTable
+        examAttempts: mysqlConfig.examAttemptTable,
+        textbookAssets: mysqlConfig.textbookAssetTable,
+        textbookNotes: mysqlConfig.textbookNoteTable
       }
     },
     course: {
@@ -4006,7 +4042,9 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
     examPaperTable: PUBLIC_MYSQL_TABLES.examPapers,
     examPaperSectionTable: PUBLIC_MYSQL_TABLES.examPaperSections,
     examPaperQuestionTable: PUBLIC_MYSQL_TABLES.examPaperQuestions,
-    examAttemptTable: PUBLIC_MYSQL_TABLES.examAttempts
+    examAttemptTable: PUBLIC_MYSQL_TABLES.examAttempts,
+    textbookAssetTable: PUBLIC_MYSQL_TABLES.textbookAssets,
+    textbookNoteTable: PUBLIC_MYSQL_TABLES.textbookNotes
   };
 
   validateMysqlIdentifier(config.database, "MySQL database");
@@ -4026,6 +4064,8 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
   validateMysqlIdentifier(config.examPaperSectionTable, "MySQL exam paper section table");
   validateMysqlIdentifier(config.examPaperQuestionTable, "MySQL exam paper question table");
   validateMysqlIdentifier(config.examAttemptTable, "MySQL exam attempt table");
+  validateMysqlIdentifier(config.textbookAssetTable, "MySQL textbook asset table");
+  validateMysqlIdentifier(config.textbookNoteTable, "MySQL textbook note table");
   return config;
 }
 
@@ -4580,6 +4620,8 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
   const examPaperSectionTable = escapeMysqlIdentifier(config.examPaperSectionTable, "MySQL exam paper section table");
   const examPaperQuestionTable = escapeMysqlIdentifier(config.examPaperQuestionTable, "MySQL exam paper question table");
   const examAttemptTable = escapeMysqlIdentifier(config.examAttemptTable, "MySQL exam attempt table");
+  const textbookAssetTable = escapeMysqlIdentifier(config.textbookAssetTable, "MySQL textbook asset table");
+  const textbookNoteTable = escapeMysqlIdentifier(config.textbookNoteTable, "MySQL textbook note table");
   await ensureCourseTable(pool, courseTable);
   await migrateCourseTable(pool, courseTable);
   await ensureCourseSectionTable(pool, courseSectionTable);
@@ -4590,6 +4632,7 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
   await ensureChromePortStateTable(pool, chromePortStateTable);
   await ensureErrorLogTable(pool, errorLogTable);
   await ensureExamTables(pool, examQuestionTable, examPaperTable, examPaperSectionTable, examPaperQuestionTable, examAttemptTable);
+  await ensureTextbookTables(pool, textbookAssetTable, textbookNoteTable);
 
   mysqlRuntime = {
     pool,
@@ -4608,7 +4651,9 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
     examPaperTable,
     examPaperSectionTable,
     examPaperQuestionTable,
-    examAttemptTable
+    examAttemptTable,
+    textbookAssetTable,
+    textbookNoteTable
   };
   return mysqlRuntime;
 }
@@ -7322,6 +7367,86 @@ const DOCUMENT_CONTENT_STRUCTURAL_KEYS = new Set([
   "updatedAt"
 ]);
 
+const MCP_DOCUMENT_TEXT_CONTAINER_KEYS = new Set([
+  "content",
+  "main",
+  "header",
+  "footer",
+  "children",
+  "items",
+  "paragraphs",
+  "rows",
+  "cells",
+  "trList",
+  "tdList",
+  "valueList",
+  "listWrap"
+]);
+
+const MCP_DOCUMENT_TEXT_SKIP_KEYS = new Set([
+  ...DOCUMENT_CONTENT_STRUCTURAL_KEYS,
+  "value",
+  "font",
+  "size",
+  "bold",
+  "italic",
+  "underline",
+  "strikeout",
+  "color",
+  "highlight",
+  "rowFlex",
+  "listType",
+  "listStyle",
+  "listId",
+  "level",
+  "href",
+  "url",
+  "colgroup",
+  "title",
+  "separator",
+  "width",
+  "height",
+  "attributes",
+  "props",
+  "format",
+  "formats",
+  "marks",
+  "decorations",
+  "metadata",
+  "meta",
+  "options",
+  "config",
+  "configs",
+  "settings",
+  "theme",
+  "selection",
+  "cursor",
+  "layout",
+  "uuid",
+  "graffiti"
+]);
+
+const MCP_DOCUMENT_TEXT_NOISE_LINE_PATTERN = /^(?:title|list|ol|ul|separator|paragraph|text|rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)|rgba\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*(?:0|1|0?\.\d+)\s*\)|#[0-9a-f]{3,8})$/i;
+
+function isMcpDocumentTextNoiseLine(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  if (MCP_DOCUMENT_TEXT_NOISE_LINE_PATTERN.test(text)) return true;
+  return /^(?:type|style|listStyle|color|backgroundColor|borderColor)\s*[:=]\s*(?:title|list|ol|ul|separator|rgb\(|rgba\(|#[0-9a-f])/i.test(text);
+}
+
+function cleanMcpDocumentText(value: string) {
+  return value
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter((line) => !isMcpDocumentTextNoiseLine(line))
+    .join("\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function hasKnowledgeDocumentText(value: unknown): boolean {
   if (typeof value === "string") {
     return value.trim().length > 0;
@@ -8052,9 +8177,24 @@ function extractMcpDocumentText(value: unknown): string {
   if (!isRecord(value)) return "";
   const own = typeof value.value === "string" ? value.value : "";
   return own + Object.entries(value)
-    .filter(([key]) => key !== "value")
+    .filter(([key, child]) => (
+      !MCP_DOCUMENT_TEXT_SKIP_KEYS.has(key)
+      && (MCP_DOCUMENT_TEXT_CONTAINER_KEYS.has(key) || Array.isArray(child) || (isRecord(child) && ("content" in child || "main" in child)))
+    ))
     .map(([, child]) => extractMcpDocumentText(child))
     .join("");
+}
+
+function createMcpDocumentTextFields(value: unknown) {
+  const textRaw = extractMcpDocumentText(value);
+  const textClean = cleanMcpDocumentText(textRaw);
+  return {
+    text: textClean,
+    textClean,
+    textRaw,
+    textNoiseRemovedLength: Math.max(0, textRaw.length - textClean.length),
+    readingGuidance: "Use text/textClean for human-readable content. document.snapshot is editor JSON for advanced tooling."
+  };
 }
 
 function appendMcpDocumentText(snapshot: KnowledgeDocumentSnapshot, text: string): KnowledgeDocumentSnapshot {
@@ -8237,7 +8377,7 @@ async function readMcpNodeDocument(args: Record<string, unknown>) {
     mindMapId: target.mindMapId,
     nodeId: target.nodeId,
     document,
-    text: extractMcpDocumentText(document?.snapshot?.content ?? "")
+    ...createMcpDocumentTextFields(document?.snapshot?.content ?? "")
   };
 }
 
@@ -8265,7 +8405,7 @@ async function writeMcpNodeDocument(args: Record<string, unknown>) {
     title,
     snapshot
   });
-  return { course: target.course, document, text: extractMcpDocumentText(document.snapshot?.content ?? "") };
+  return { course: target.course, document, ...createMcpDocumentTextFields(document.snapshot?.content ?? "") };
 }
 
 async function appendMcpNodeDocument(args: Record<string, unknown>) {
@@ -8286,7 +8426,7 @@ async function appendMcpNodeDocument(args: Record<string, unknown>) {
     title: normalizeMcpText(args.title, "") || existing?.title || "节点文档",
     snapshot
   });
-  return { course: target.course, document, text: extractMcpDocumentText(document.snapshot?.content ?? "") };
+  return { course: target.course, document, ...createMcpDocumentTextFields(document.snapshot?.content ?? "") };
 }
 
 async function formatMcpNodeDocument(args: Record<string, unknown>) {
@@ -8578,10 +8718,364 @@ function createMainWindow() {
   }
 }
 
+let isTextbookProtocolHandlerRegistered = false;
+const textbookPdfWindows = new Map<string, BrowserWindow>();
+
+function createTextbookPdfResponse(filePath: string, request: Request, fileSize: number) {
+  const baseHeaders = {
+    "Content-Type": "application/pdf",
+    "Accept-Ranges": "bytes",
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store"
+  };
+  const rangeHeader = request.headers.get("range")?.trim() ?? "";
+  const rangeMatch = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader);
+
+  if (rangeMatch) {
+    const suffixLength = rangeMatch[1] ? 0 : Number(rangeMatch[2]);
+    const start = rangeMatch[1]
+      ? Number(rangeMatch[1])
+      : Math.max(0, fileSize - (Number.isFinite(suffixLength) ? suffixLength : 0));
+    const end = rangeMatch[2] && rangeMatch[1]
+      ? Number(rangeMatch[2])
+      : fileSize - 1;
+
+    if (
+      !Number.isSafeInteger(start)
+      || !Number.isSafeInteger(end)
+      || start < 0
+      || end < start
+      || start >= fileSize
+    ) {
+      return new Response(null, {
+        status: 416,
+        headers: {
+          ...baseHeaders,
+          "Content-Range": `bytes */${fileSize}`
+        }
+      });
+    }
+
+    const safeEnd = Math.min(end, fileSize - 1);
+    const chunkSize = safeEnd - start + 1;
+    const body = Readable.toWeb(createReadStream(filePath, { start, end: safeEnd })) as unknown as BodyInit;
+    return new Response(body, {
+      status: 206,
+      headers: {
+        ...baseHeaders,
+        "Content-Length": String(chunkSize),
+        "Content-Range": `bytes ${start}-${safeEnd}/${fileSize}`
+      }
+    });
+  }
+
+  const body = Readable.toWeb(createReadStream(filePath)) as unknown as BodyInit;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...baseHeaders,
+      "Content-Length": String(fileSize)
+    }
+  });
+}
+
+function registerTextbookProtocolHandler() {
+  if (isTextbookProtocolHandlerRegistered) return;
+  isTextbookProtocolHandlerRegistered = true;
+  protocol.handle(TEXTBOOK_PDF_PROTOCOL, async (request) => {
+    const url = new URL(request.url);
+    const assetId = decodeURIComponent(path.basename(url.pathname, ".pdf"));
+    const filePath = resolveTextbookAssetPath(assetId);
+    if (!filePath || path.extname(filePath).toLowerCase() !== ".pdf") {
+      return new Response("PDF not found", { status: 404 });
+    }
+
+    try {
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile()) return new Response("PDF not found", { status: 404 });
+      return createTextbookPdfResponse(filePath, request, stat.size);
+    } catch {
+      return new Response("PDF not found", { status: 404 });
+    }
+  });
+}
+
+function normalizeTextbookScope(input: unknown) {
+  const request = input && typeof input === "object" ? input as { courseId?: unknown; mindMapId?: unknown } : {};
+  return {
+    courseId: normalizeId(request.courseId, "Course id"),
+    mindMapId: normalizeId(request.mindMapId, "Mind map id")
+  };
+}
+
+function getTextbookStoreFilePath(courseId: string, mindMapId: string) {
+  return getAistudyDataPath("state", "textbooks", `${courseId}__${mindMapId}.json`);
+}
+
+function getLegacyTextbookScope(scope: { courseId: string; mindMapId: string }) {
+  return scope.mindMapId === scope.courseId ? null : { courseId: scope.courseId, mindMapId: scope.courseId };
+}
+
+function reScopeTextbookStore(store: TextbookStore, scope: { courseId: string; mindMapId: string }) {
+  return normalizeTextbookStore({
+    ...store,
+    assets: store.assets.map((asset) => ({ ...asset, courseId: scope.courseId, mindMapId: scope.mindMapId })),
+    notes: store.notes.map((note) => ({ ...note, courseId: scope.courseId, mindMapId: scope.mindMapId }))
+  }, scope);
+}
+
+function getUpdatedAtTime(value: string | undefined) {
+  const time = Date.parse(value || "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function shouldUseIncomingTextbookRecord<T extends { updatedAt: string }>(existing: T | undefined, incoming: T) {
+  return !existing || getUpdatedAtTime(incoming.updatedAt) >= getUpdatedAtTime(existing.updatedAt);
+}
+
+function getTextbookNoteKey(note: TextbookStore["notes"][number]) {
+  return `${note.textbookId}\u0000${note.nodeId}`;
+}
+
+function mergeTextbookStores(base: TextbookStore, incoming: TextbookStore, scope: { courseId: string; mindMapId: string }) {
+  const assets = new Map<string, TextbookStore["assets"][number]>();
+  for (const asset of base.assets) assets.set(asset.id, asset);
+  for (const asset of incoming.assets) {
+    const existing = assets.get(asset.id);
+    if (shouldUseIncomingTextbookRecord(existing, asset)) assets.set(asset.id, asset);
+  }
+
+  const notes = new Map<string, TextbookStore["notes"][number]>();
+  for (const note of base.notes) notes.set(getTextbookNoteKey(note), note);
+  for (const note of incoming.notes) {
+    const key = getTextbookNoteKey(note);
+    const existing = notes.get(key);
+    if (shouldUseIncomingTextbookRecord(existing, note)) notes.set(key, note);
+  }
+
+  return normalizeTextbookStore({
+    version: 1,
+    assets: Array.from(assets.values()),
+    notes: Array.from(notes.values())
+  }, scope);
+}
+
+async function readLocalTextbookStore(courseId: string, mindMapId: string): Promise<TextbookStore> {
+  const filePath = getTextbookStoreFilePath(courseId, mindMapId);
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const store = normalizeTextbookStore(JSON.parse(raw), { courseId, mindMapId });
+    rememberTextbookAssetPaths(store.assets);
+    return store;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return normalizeTextbookStore(null);
+    }
+    await quarantineUnreadableFile(filePath, error);
+    return normalizeTextbookStore(null);
+  }
+}
+
+async function writeLocalTextbookStore(courseId: string, mindMapId: string, store: TextbookStore) {
+  const normalized = normalizeTextbookStore(store, { courseId, mindMapId });
+  await writeJsonAtomic(getTextbookStoreFilePath(courseId, mindMapId), normalized);
+  rememberTextbookAssetPaths(normalized.assets);
+  return normalized;
+}
+
+async function loadTextbookStore(input: unknown): Promise<TextbookStore> {
+  const scope = normalizeTextbookScope(input);
+  const localStore = await readLocalTextbookStore(scope.courseId, scope.mindMapId);
+  const legacyScope = getLegacyTextbookScope(scope);
+  const migrateLegacyStore = async (store: TextbookStore) => {
+    const migratedStore = reScopeTextbookStore(store, scope);
+    await writeLocalTextbookStore(scope.courseId, scope.mindMapId, migratedStore);
+    return migratedStore;
+  };
+  try {
+    const runtime = await getMysqlRuntime();
+    const remoteStore = await readTextbookStoreFromMysql(runtime, scope);
+    const mergedStore = mergeTextbookStores(remoteStore, localStore, scope);
+    if (textbookStoreHasContent(mergedStore)) {
+      await writeLocalTextbookStore(scope.courseId, scope.mindMapId, mergedStore);
+      if (!textbookStoreHasContent(localStore)) return mergedStore;
+      try {
+        const syncedStore = await writeTextbookStoreToMysql(runtime, mergedStore, scope);
+        await writeLocalTextbookStore(scope.courseId, scope.mindMapId, syncedStore);
+        return syncedStore;
+      } catch (error) {
+        console.warn("Textbook MySQL merge sync unavailable, using merged local snapshot.", error);
+        return mergedStore;
+      }
+    }
+    if (legacyScope) {
+      const legacyRemoteStore = await readTextbookStoreFromMysql(runtime, legacyScope);
+      const legacyLocalStore = await readLocalTextbookStore(legacyScope.courseId, legacyScope.mindMapId);
+      const legacyStore = textbookStoreHasContent(legacyRemoteStore) ? legacyRemoteStore : legacyLocalStore;
+      if (textbookStoreHasContent(legacyStore)) {
+        const migratedStore = reScopeTextbookStore(legacyStore, scope);
+        const syncedStore = await writeTextbookStoreToMysql(runtime, migratedStore, scope);
+        await writeLocalTextbookStore(scope.courseId, scope.mindMapId, syncedStore);
+        return syncedStore;
+      }
+    }
+    return remoteStore;
+  } catch (error) {
+    console.warn("Textbook MySQL store unavailable, using local snapshot.", error);
+    if (!textbookStoreHasContent(localStore) && legacyScope) {
+      const legacyLocalStore = await readLocalTextbookStore(legacyScope.courseId, legacyScope.mindMapId);
+      if (textbookStoreHasContent(legacyLocalStore)) {
+        return migrateLegacyStore(legacyLocalStore);
+      }
+    }
+    return localStore;
+  }
+}
+
+async function saveTextbookStore(input: unknown): Promise<TextbookStore> {
+  const request = input && typeof input === "object" ? input as { courseId?: unknown; mindMapId?: unknown; store?: unknown } : {};
+  const scope = normalizeTextbookScope(request);
+  const normalized = normalizeTextbookStore(request.store, scope);
+  const localStore = await readLocalTextbookStore(scope.courseId, scope.mindMapId);
+  const mergedLocalStore = mergeTextbookStores(localStore, normalized, scope);
+  await writeLocalTextbookStore(scope.courseId, scope.mindMapId, mergedLocalStore);
+  try {
+    const runtime = await getMysqlRuntime();
+    const remoteCurrentStore = await readTextbookStoreFromMysql(runtime, scope);
+    const storeToSync = mergeTextbookStores(remoteCurrentStore, mergedLocalStore, scope);
+    const remoteStore = await writeTextbookStoreToMysql(runtime, storeToSync, scope);
+    await writeLocalTextbookStore(scope.courseId, scope.mindMapId, remoteStore);
+    return remoteStore;
+  } catch (error) {
+    console.warn("Textbook MySQL save unavailable, local snapshot kept.", error);
+    return mergedLocalStore;
+  }
+}
+
+async function chooseTextbookPdf(event: IpcMainInvokeEvent, input: unknown): Promise<TextbookAsset | null> {
+  const scope = normalizeTextbookScope(input);
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const dialogOptions: OpenDialogOptions = {
+    title: "选择教材 PDF",
+    properties: ["openFile"],
+    filters: [{ name: "PDF", extensions: ["pdf"] }]
+  };
+  const result = window ? await dialog.showOpenDialog(window, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled || !result.filePaths[0]) return null;
+  return createTextbookAssetFromFile({
+    courseId: scope.courseId,
+    mindMapId: scope.mindMapId,
+    filePath: result.filePaths[0]
+  });
+}
+
+async function readTextbookPdfBytes(input: unknown): Promise<ArrayBuffer> {
+  const request = input && typeof input === "object" ? input as { assetId?: unknown; courseId?: unknown; mindMapId?: unknown } : {};
+  const scope = normalizeTextbookScope(request);
+  const assetId = normalizeId(request.assetId, "Textbook asset id");
+  const localStore = await readLocalTextbookStore(scope.courseId, scope.mindMapId);
+  let asset = localStore.assets.find((item) => item.id === assetId) ?? null;
+
+  if (!asset) {
+    try {
+      const runtime = await getMysqlRuntime();
+      const remoteStore = await readTextbookStoreFromMysql(runtime, scope);
+      asset = remoteStore.assets.find((item) => item.id === assetId) ?? null;
+      if (asset) {
+        await writeLocalTextbookStore(scope.courseId, scope.mindMapId, mergeTextbookStores(remoteStore, localStore, scope));
+      }
+    } catch {
+      asset = null;
+    }
+  }
+
+  const filePath = asset?.filePath || resolveTextbookAssetPath(assetId);
+  if (!asset || !filePath || path.extname(filePath).toLowerCase() !== ".pdf") {
+    throw new Error("教材文件没有打开，请重新选择。");
+  }
+
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile()) {
+    throw new Error("教材文件没有打开，请重新选择。");
+  }
+
+  const buffer = await fs.readFile(filePath);
+  return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+}
+
+function normalizeTextbookPdfWindowRequest(input: unknown) {
+  const request = input && typeof input === "object"
+    ? input as { assetId?: unknown; courseId?: unknown; mindMapId?: unknown; pageNumber?: unknown; zoom?: unknown }
+    : {};
+  const scope = normalizeTextbookScope(request);
+  const assetId = normalizeId(request.assetId, "Textbook asset id");
+  const pageNumber = Math.max(1, Math.round(Number(request.pageNumber) || 1));
+  const zoom = Math.max(60, Math.min(180, Math.round(Number(request.zoom) || 100)));
+  return { ...scope, assetId, pageNumber, zoom };
+}
+
+async function openTextbookPdfWindow(input: unknown) {
+  const request = normalizeTextbookPdfWindowRequest(input);
+  const key = `${request.courseId}:${request.mindMapId}:${request.assetId}`;
+  const existing = textbookPdfWindows.get(key);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return true;
+  }
+
+  const pdfWindow = new BrowserWindow({
+    width: 980,
+    height: 860,
+    minWidth: 760,
+    minHeight: 640,
+    frame: true,
+    autoHideMenuBar: true,
+    show: false,
+    backgroundColor: "#f4f6f8",
+    title: "AIstudy 教材",
+    icon: path.join(__dirname, "../build/icon.ico"),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
+    }
+  });
+
+  textbookPdfWindows.set(key, pdfWindow);
+  pdfWindow.once("ready-to-show", () => {
+    if (!pdfWindow.isDestroyed()) pdfWindow.show();
+  });
+  pdfWindow.on("closed", () => {
+    textbookPdfWindows.delete(key);
+  });
+
+  const query = {
+    view: "textbook-pdf",
+    courseId: request.courseId,
+    mindMapId: request.mindMapId,
+    assetId: request.assetId,
+    pageNumber: String(request.pageNumber),
+    zoom: String(request.zoom)
+  };
+
+  if (isDev) {
+    const url = new URL(process.env.VITE_DEV_SERVER_URL!);
+    for (const [name, value] of Object.entries(query)) {
+      url.searchParams.set(name, value);
+    }
+    await pdfWindow.loadURL(url.toString());
+  } else {
+    await pdfWindow.loadFile(path.join(__dirname, "../dist/index.html"), { query });
+  }
+  return true;
+}
+
 if (process.argv.includes("--aistudy-mcp")) {
   void mcpController.startStdioServer();
 } else {
 app.whenReady().then(() => {
+  registerTextbookProtocolHandler();
   createMainWindow();
   warmMysqlRuntime();
   startMcpEventBridge();
@@ -8717,6 +9211,22 @@ ipcMain.handle("exams:save", withUserFacingError("exams:save", "考试数据保�
   const runtime = await getMysqlRuntime();
   return writeExamStoreToMysql(runtime, store);
 }));
+
+ipcMain.handle("textbooks:load", withUserFacingError("textbooks:load", "教材读取没有完成，请稍后再试。", (_event, scope) => loadTextbookStore(scope)));
+
+ipcMain.handle("textbooks:save", withUserFacingError("textbooks:save", "教材保存没有完成，请稍后再试。", (_event, request) => saveTextbookStore(request)));
+
+ipcMain.handle("textbooks:choose-pdf", withUserFacingError("textbooks:choose-pdf", "教材文件没有打开，请稍后再试。", (event, scope) => (
+  chooseTextbookPdf(event as IpcMainInvokeEvent, scope)
+)));
+
+ipcMain.handle("textbooks:read-pdf", withUserFacingError("textbooks:read-pdf", "教材文件没有打开，请重新选择。", (_event, request) => (
+  readTextbookPdfBytes(request)
+)));
+
+ipcMain.handle("textbooks:open-pdf-window", withUserFacingError("textbooks:open-pdf-window", "PDF 窗口没有打开。", (_event, request) => (
+  openTextbookPdfWindow(request)
+)));
 
 ipcMain.handle("mcp:state", withUserFacingError("mcp:state", "MCP 状态暂时无法读取。", () => mcpController.getState()));
 

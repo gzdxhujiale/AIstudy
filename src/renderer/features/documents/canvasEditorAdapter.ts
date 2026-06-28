@@ -42,6 +42,10 @@ type CanvasDocumentEvents = {
   onAskAi?: (selectedText: string) => void;
 };
 
+type CanvasDocumentEditorOptions = {
+  compact?: boolean;
+};
+
 let canvasEditorModulePromise: Promise<CanvasEditorModule> | null = null;
 
 const INLINE_STYLE_KEYS: InlineStyleKey[] = [
@@ -456,8 +460,16 @@ function readEditorRangeText(editor: CanvasEditorInstance) {
   }
 }
 
-function getLandscapePageSize(container: HTMLDivElement) {
+function getDocumentPageSize(container: HTMLDivElement, options: CanvasDocumentEditorOptions) {
   const availableWidth = container.parentElement?.clientWidth ?? container.clientWidth;
+  if (options.compact) {
+    const width = Math.max(360, Math.floor(availableWidth - 24));
+    return {
+      width,
+      height: Math.round(width * 1.35)
+    };
+  }
+
   const width = Math.max(MIN_LANDSCAPE_PAGE_WIDTH, Math.floor(availableWidth - DOCUMENT_PAGE_GUTTER));
   return {
     width,
@@ -497,10 +509,11 @@ function createDocumentScrollContainerSelector(container: HTMLDivElement): { sel
 export async function createCanvasDocumentEditor(
   container: HTMLDivElement,
   snapshot: KnowledgeDocumentSnapshot,
-  events: CanvasDocumentEvents
+  events: CanvasDocumentEvents,
+  options: CanvasDocumentEditorOptions = {}
 ): Promise<KnowledgeDocumentEditorHandle> {
   const { default: Editor, EditorMode, PageMode, PaperDirection, RenderMode, RowFlex, ListType, ListStyle, TitleLevel } = await loadCanvasEditor();
-  const pageSize = getLandscapePageSize(container);
+  const pageSize = getDocumentPageSize(container, options);
   const scrollContainer = createDocumentScrollContainerSelector(container);
   const editorOptions: CanvasEditorOptions = {
     mode: EditorMode.EDIT,
@@ -513,10 +526,10 @@ export async function createCanvasDocumentEditor(
     minSize: 10,
     maxSize: 72,
     historyMaxRecordCount: 60,
-    pageGap: 16,
+    pageGap: options.compact ? 10 : 16,
     width: pageSize.width,
     height: pageSize.height,
-    margins: [64, 64, 64, 64],
+    margins: options.compact ? [32, 36, 32, 36] : [64, 64, 64, 64],
     scrollContainerSelector: scrollContainer.selector,
     pageOuterSelectionDisable: true,
     aistudyFastSelection: true,

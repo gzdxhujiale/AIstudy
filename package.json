@@ -1,6 +1,6 @@
 {
   "name": "aistudy",
-  "version": "0.1.72",
+  "version": "0.1.73",
   "description": "AIstudy desktop shell.",
   "author": "SnowLove0303",
   "private": false,
@@ -25,6 +25,7 @@
     "pack": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist",
     "dist": "npm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
     "dist:oneclick": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/close-and-dist.ps1",
+    "shortcuts:refresh": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/refresh-shortcuts.ps1",
     "setup:doctor": "node scripts/setup/check-dev-environment.mjs",
     "setup:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup/install-deps.ps1",
     "import:docx": "node scripts/importers/import-docx-to-node-documents.mjs",
@@ -40,7 +41,8 @@
   "dependencies": {
     "docx": "^9.7.1",
     "jszip": "^3.10.1",
-    "mysql2": "^3.22.5"
+    "mysql2": "^3.22.5",
+    "pdfjs-dist": "^6.1.200"
   },
   "devDependencies": {
     "@hufe921/canvas-editor": "^0.9.135",
