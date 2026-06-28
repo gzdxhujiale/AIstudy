@@ -6,8 +6,11 @@ $releaseRoot = Join-Path $projectRoot "release"
 $shortcutRefreshScript = Join-Path $scriptDir "refresh-shortcuts.ps1"
 $releasePrefix = (Join-Path $projectRoot "release-").ToLowerInvariant()
 $cacheRoot = Join-Path $projectRoot ".tmp\build-cache"
-$portableDataDir = Join-Path $releaseRoot "win-unpacked\AIstudyPublicData"
-$preservedDataDir = Join-Path $projectRoot ".tmp\packaging-preserve\AIstudyPublicData"
+$portableDataDirs = @(
+  (Join-Path $releaseRoot "win-unpacked\AIstudyPublicData"),
+  (Join-Path $releaseRoot "win-unpacked\AIstudyUserData")
+)
+$preservedDataRoot = Join-Path $projectRoot ".tmp\packaging-preserve"
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $OutputEncoding
 try {
@@ -61,9 +64,11 @@ function Test-IsProjectBuildProcess {
 }
 
 function Stop-ProjectRuntimeProcesses {
-  param([string] $RuntimePath)
+  param([string[]] $RuntimePaths)
 
-  $runtimeFullPath = [System.IO.Path]::GetFullPath($RuntimePath).ToLowerInvariant()
+  $runtimeFullPaths = @($RuntimePaths | ForEach-Object {
+    [System.IO.Path]::GetFullPath($_).ToLowerInvariant()
+  })
   $currentProcessId = $PID
   $runtimeProcesses = Get-CimInstance Win32_Process | Where-Object {
     $commandLine = [string] $_.CommandLine
@@ -73,7 +78,13 @@ function Stop-ProjectRuntimeProcesses {
     if ([int] $_.ProcessId -eq $currentProcessId) {
       return $false
     }
-    return $commandLine.ToLowerInvariant().Contains($runtimeFullPath)
+    $normalizedCommandLine = $commandLine.ToLowerInvariant()
+    foreach ($runtimeFullPath in $runtimeFullPaths) {
+      if ($normalizedCommandLine.Contains($runtimeFullPath)) {
+        return $true
+      }
+    }
+    return $false
   }
 
   if (-not $runtimeProcesses) {
@@ -92,48 +103,72 @@ function Stop-ProjectRuntimeProcesses {
 }
 
 function Save-PortableRuntimeData {
-  $portableFullPath = [System.IO.Path]::GetFullPath($portableDataDir)
   $releaseFullPath = [System.IO.Path]::GetFullPath($releaseRoot)
-  if (-not $portableFullPath.StartsWith($releaseFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to preserve path outside release: $portableFullPath"
-  }
-
-  if (-not (Test-Path -LiteralPath $portableFullPath)) {
-    return
-  }
-
-  $preservedFullPath = [System.IO.Path]::GetFullPath($preservedDataDir)
   $tmpRoot = [System.IO.Path]::GetFullPath((Join-Path $projectRoot ".tmp"))
-  if (-not $preservedFullPath.StartsWith($tmpRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to preserve data outside project .tmp: $preservedFullPath"
-  }
 
-  if (Test-Path -LiteralPath $preservedFullPath) {
-    Remove-Item -LiteralPath $preservedFullPath -Recurse -Force
+  foreach ($portableDataDir in $portableDataDirs) {
+    $portableFullPath = [System.IO.Path]::GetFullPath($portableDataDir)
+    if (-not $portableFullPath.StartsWith($releaseFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Refusing to preserve path outside release: $portableFullPath"
+    }
+
+    if (-not (Test-Path -LiteralPath $portableFullPath)) {
+      continue
+    }
+
+    $preservedFullPath = [System.IO.Path]::GetFullPath((Join-Path $preservedDataRoot (Split-Path -Leaf $portableFullPath)))
+    if (-not $preservedFullPath.StartsWith($tmpRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Refusing to preserve data outside project .tmp: $preservedFullPath"
+    }
+
+    if (Test-Path -LiteralPath $preservedFullPath) {
+      Remove-Item -LiteralPath $preservedFullPath -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $preservedFullPath) | Out-Null
+    Move-Item -LiteralPath $portableFullPath -Destination $preservedFullPath
+    Write-Host ("[AIstudy] Preserved portable runtime data: {0}" -f (Split-Path -Leaf $portableFullPath))
   }
-  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $preservedFullPath) | Out-Null
-  Move-Item -LiteralPath $portableFullPath -Destination $preservedFullPath
-  Write-Host "[AIstudy] Preserved portable runtime data."
 }
 
 function Restore-PortableRuntimeData {
-  $preservedFullPath = [System.IO.Path]::GetFullPath($preservedDataDir)
-  if (-not (Test-Path -LiteralPath $preservedFullPath)) {
-    return
-  }
-
-  $portableFullPath = [System.IO.Path]::GetFullPath($portableDataDir)
   $releaseFullPath = [System.IO.Path]::GetFullPath($releaseRoot)
-  if (-not $portableFullPath.StartsWith($releaseFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to restore path outside release: $portableFullPath"
-  }
 
-  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $portableFullPath) | Out-Null
-  if (Test-Path -LiteralPath $portableFullPath) {
-    Remove-Item -LiteralPath $portableFullPath -Recurse -Force
+  foreach ($portableDataDir in $portableDataDirs) {
+    $portableFullPath = [System.IO.Path]::GetFullPath($portableDataDir)
+    $preservedFullPath = [System.IO.Path]::GetFullPath((Join-Path $preservedDataRoot (Split-Path -Leaf $portableFullPath)))
+    if (-not (Test-Path -LiteralPath $preservedFullPath)) {
+      continue
+    }
+
+    if (-not $portableFullPath.StartsWith($releaseFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Refusing to restore path outside release: $portableFullPath"
+    }
+
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $portableFullPath) | Out-Null
+    if (Test-Path -LiteralPath $portableFullPath) {
+      Remove-Item -LiteralPath $portableFullPath -Recurse -Force
+    }
+    Move-Item -LiteralPath $preservedFullPath -Destination $portableFullPath
+    Write-Host ("[AIstudy] Restored portable runtime data: {0}" -f (Split-Path -Leaf $portableFullPath))
   }
-  Move-Item -LiteralPath $preservedFullPath -Destination $portableFullPath
-  Write-Host "[AIstudy] Restored portable runtime data."
+}
+
+function Remove-PortableRuntimeDataFromAppOutDir {
+  $releaseFullPath = [System.IO.Path]::GetFullPath($releaseRoot)
+
+  foreach ($portableDataDir in $portableDataDirs) {
+    $portableFullPath = [System.IO.Path]::GetFullPath($portableDataDir)
+    if (-not $portableFullPath.StartsWith($releaseFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+      throw "Refusing to remove runtime data outside release: $portableFullPath"
+    }
+
+    if (-not (Test-Path -LiteralPath $portableFullPath)) {
+      continue
+    }
+
+    Remove-Item -LiteralPath $portableFullPath -Recurse -Force
+    Write-Host ("[AIstudy] Removed runtime data from installer source: {0}" -f (Split-Path -Leaf $portableFullPath))
+  }
 }
 
 Set-Location $projectRoot
@@ -167,7 +202,7 @@ if ($oldProcesses) {
 
 try {
   Write-Host "[AIstudy] Cleaning stale packaging artifacts..."
-  Stop-ProjectRuntimeProcesses $portableDataDir
+  Stop-ProjectRuntimeProcesses $portableDataDirs
   Save-PortableRuntimeData
   Remove-BuildArtifact (Join-Path $releaseRoot "win-unpacked")
   Remove-BuildArtifact (Join-Path $releaseRoot ("aistudy-{0}-x64.nsis.7z" -f $appVersion))
@@ -193,9 +228,23 @@ try {
         $exitCode = $LASTEXITCODE
       }
     }
+
+    if ($exitCode -eq 0) {
+      $prepackagedDir = Join-Path $releaseRoot "win-unpacked"
+      $prepackagedExe = Join-Path $prepackagedDir "AIstudy.exe"
+
+      if (-not (Test-Path -LiteralPath $prepackagedExe)) {
+        throw "Cannot rebuild clean installer because prepackaged app is missing: $prepackagedExe"
+      }
+
+      Remove-PortableRuntimeDataFromAppOutDir
+      Write-Host "[AIstudy] Rebuilding installer from cleaned app directory..."
+      & npx.cmd electron-builder --win nsis --prepackaged $prepackagedDir
+      $exitCode = $LASTEXITCODE
+    }
   }
 } finally {
-  Stop-ProjectRuntimeProcesses $portableDataDir
+  Stop-ProjectRuntimeProcesses $portableDataDirs
   Restore-PortableRuntimeData
 }
 

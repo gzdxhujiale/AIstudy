@@ -8,7 +8,7 @@
 - GitHub 仓库：`https://github.com/SnowLove0303/AIstudy-Public.git`
 - 应用名：`AIstudy`
 - 当前包名：`aistudy`
-- 当前版本号：`0.1.74`，以 `package.json` 的 `version` 为准
+- 当前版本号：`0.1.75`，以 `package.json` 的 `version` 为准
 - 公开版定位：开发端、发布端、纯净版基线
 - 自用版仓库：`F:\XIANGMU\AIstudy`
 
@@ -18,15 +18,15 @@
 
 截至 2026-06-28，本公开版已从 MCP/知识库主链路扩展到教材、考试和信息采集的完整应用壳：
 
-- 最新安装包：`release\AIstudy-Setup-0.1.74.exe`
+- 最新安装包：`release\AIstudy-Setup-0.1.75.exe`
 - 最新免安装运行版：`release\win-unpacked\AIstudy.exe`
 - 最新更新摘要见：`docs/updates/INDEX.md`
 - 当前主要分支：`main`
-- 当前本地 HEAD 与远端 `origin/main` 一致，提交为 `abb69bf feat: persist exam papers in mysql`；`git rev-list --left-right --count "HEAD...@{u}"` 为 `0 0`。
+- 当前本地 HEAD 与远端 `origin/main` 一致，提交为 `1209a84 fix: isolate textbook page bindings`；`git rev-list --left-right --count "HEAD...@{u}"` 为 `0 0`。
 - 当前公开版已经具备课程/分区、思维导图、节点 Word 文档、教材 PDF 与节点笔记、题库考试、信息采集、AI 助手、Chrome 固定端口、MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、更新管理、错误日志、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层和右侧文档格式面板。
-- 最近一轮更新集中在教材节点页段绑定状态隔离、已绑定锁定/取消重设，以及教材 PDF 独立窗口残留清理。
+- 最近一轮更新集中在纯净公开版默认隔离本机数据目录、未显式配置 MySQL 时避免读取本机旧数据库内容，并确保打包时排除本机运行数据目录。
 
-当前接手时工作区不是干净状态。`git status --short --branch` 显示 `main...origin/main`，并已有 `electron/main.ts`、`electron/preload.cts`、`package.json`、`package-lock.json`、`scripts/mcp/aistudy-mcp-server.mjs`、打包脚本、MCP 文档、导图/文档/主界面样式等修改；同时有 `electron/textbookStore.ts`、`scripts/package/refresh-shortcuts.ps1`、`src/renderer/features/textbook/` 未跟踪。接手者必须先确认这些改动归属，不要回滚或覆盖。
+当前接手时工作区不是干净状态。`git status --short --branch` 显示 `main...origin/main`，并已有 `electron/main.ts`、`package.json`、`package-lock.json`、`scripts/package/close-and-dist.ps1`、`docs/updates/INDEX.md`、`docs/codex/CODEX_HANDOFF.md` 修改，均与 0.1.75 纯净公开版数据隔离和打包排除运行数据相关。接手者必须先确认这些改动归属，不要回滚或覆盖。
 
 本轮功能遍历确认的主功能目录为 `assistant`、`chromePorts`、`collection`、`course`、`documents`、`exam`、`importer`、`mcp`、`mindmap`、`textbook`。其中 `textbook` 已真实接入主界面、preload、主进程、MySQL 和本地兜底，并已补齐模块 README。
 
@@ -109,7 +109,7 @@ AISTUDY_PUBLIC_DATA_ROOT
 AISTUDY_PUBLIC_RUNTIME_ROOT
 ```
 
-`AISTUDY_PUBLIC_USER_DATA_ROOT` 控制 Electron `userData`。开发模式默认是项目下 `.runtime\user-data`；生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyUserData`，否则优先落到 `F:\AIstudyPublicData\user-data`。`AISTUDY_PUBLIC_DATA_ROOT` 控制业务数据根，生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyPublicData`，否则优先使用 `F:\AIstudyPublicData`。
+`AISTUDY_PUBLIC_USER_DATA_ROOT` 控制 Electron `userData`。开发模式默认是项目下 `.runtime\user-data`；生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyUserData`，否则优先落到 `F:\AIstudyPublicCleanData\user-data`。`AISTUDY_PUBLIC_DATA_ROOT` 控制业务数据根，生产包在非 C 盘运行时优先使用 exe 旁边的 `AIstudyPublicData`，否则优先使用 `F:\AIstudyPublicCleanData`。生产包没有显式 `mysql.config.json` 或 `AISTUDY_PUBLIC_MYSQL_*` 环境变量时，不自动连接本机默认 MySQL，避免纯净安装读取旧 `aistudy_public` 数据库。
 
 运行目录当前包含：
 
@@ -484,12 +484,13 @@ npm run github:sync:fix     # 按脚本规则修复 GitHub 发布同步问题
 
 ```text
 关闭旧 packaged AIstudy 进程
-停止占用 release\win-unpacked\AIstudyPublicData 的运行进程
-保留 win-unpacked 里的便携运行数据
+停止占用 release\win-unpacked\AIstudyPublicData 和 AIstudyUserData 的运行进程
+保留 win-unpacked 里的便携运行数据和 Electron userData
 清理旧 release 产物
 写入更新索引
 执行 npm run dist
 必要时用 prepackaged win-unpacked 重试 NSIS
+从 win-unpacked 移除本机运行数据目录，并用清理后的 prepackaged win-unpacked 重建最终 NSIS 安装器
 恢复便携运行数据
 刷新并校验桌面、开始菜单快捷方式
 ```
@@ -576,6 +577,7 @@ npm run dist:oneclick
 
 ## 11. 最近版本记录
 
+- `0.1.75`：纯净公开版默认隔离本机数据目录，并在未显式配置 MySQL 时避免读取本机旧数据库内容。
 - `0.1.74`：修复教材节点页段绑定状态隔离、已绑定锁定/取消重设，并清理教材 PDF 独立窗口残留。
 - `0.1.73`：修复教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化问题，并优化文档内 AI 小窗拖动体验。
 - `0.1.72`：一键打包生成安装包。
@@ -688,7 +690,7 @@ electron/main.ts
 - `src/renderer/features/textbook/` 原本缺 README，本轮已补齐；后续教材功能变化要同步维护该 README。
 - `scripts/mcp/aistudy-mcp-server.mjs` 的 Chrome 端口平台列表缺少 `xiaohongshu`，而 `electron/main.ts`、`electron/mcp/controller.ts` 和 MCP 文档已经包含小红书 `9235`；后续改 MCP 端口能力时要先同步这里。
 - `docs/deployment-new-machine.md` 示例安装包版本仍是旧的 `0.1.14`，具体版本必须以 `package.json`、`docs/updates/INDEX.md` 和 `release/AIstudy-Setup-*.exe` 为准。
-- `docs/ARCHITECTURE.md` 的 “Current Implemented Surfaces” 标题仍停在 `0.1.68`，而当前包版本和更新索引已更新为 `0.1.74`；新线程判断版本时以 `package.json`、`docs/updates/INDEX.md`、`release/AIstudy-Setup-*.exe` 和本交接文档为准。
+- `docs/ARCHITECTURE.md` 的 “Current Implemented Surfaces” 标题仍停在 `0.1.68`，而当前包版本和更新索引已更新为 `0.1.75`；新线程判断版本时以 `package.json`、`docs/updates/INDEX.md`、`release/AIstudy-Setup-*.exe` 和本交接文档为准。
 - `electron/main.ts` 仍承载大量业务服务逻辑。继续扩展考试、教材、采集或 MCP 时，优先抽到独立 main-side service 文件，再通过 preload 暴露，不要继续扩大主进程巨文件。
 - 本轮检索了 `TODO/FIXME/placeholder/mock/sample/lorem/测试/占位/假/dummy/fake`。新增可疑业务假入口未发现；命中主要是历史研究文档里的 fixture/sample 计划、CSS/输入框 placeholder、导入报告 `sample` 字段，以及考试政治真题种子入口。后续如果改 UI，应继续遵守“不展示未接入真实能力的入口”。
 - 当前工作区已有用户/历史改动，交接者在任何提交、打包或发布前必须重新跑 `git status --short --branch` 并确认改动归属。

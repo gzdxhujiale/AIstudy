@@ -32,6 +32,7 @@ import { createMcpRemoteAccessController } from "./mcp/remoteAccess.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+const PUBLIC_CLEAN_DATA_ROOT_NAME = "AIstudyPublicCleanData";
 const execFileAsync = promisify(execFile);
 const MIND_MAP_SNAPSHOT_RETENTION_LIMIT = AISTUDY_CORE_CONTRACT.mindMap.snapshotRetentionLimit;
 const KNOWLEDGE_DOCUMENT_SNAPSHOT_RETENTION_LIMIT = AISTUDY_CORE_CONTRACT.knowledgeDocument.snapshotRetentionLimit;
@@ -68,7 +69,7 @@ function resolveAistudyUserDataRoot() {
 
   const fDriveRoot = "F:\\";
   if (existsSync(fDriveRoot)) {
-    return path.join(fDriveRoot, "AIstudyPublicData", "user-data");
+    return path.join(fDriveRoot, PUBLIC_CLEAN_DATA_ROOT_NAME, "user-data");
   }
 
   return path.join(app.getAppPath(), ".runtime", "user-data");
@@ -300,6 +301,7 @@ type MysqlConfig = {
   port: number;
   user: string;
   password: string;
+  explicitlyConfigured: boolean;
   database: string;
   courseTable: string;
   courseSectionTable: string;
@@ -892,7 +894,7 @@ function getAistudyDataRoot() {
 
   const fDriveRoot = "F:\\";
   if (existsSync(fDriveRoot)) {
-    return path.join(fDriveRoot, "AIstudyPublicData");
+    return path.join(fDriveRoot, PUBLIC_CLEAN_DATA_ROOT_NAME);
   }
 
   return path.join(app.getPath("userData"), "AIstudyPublicData");
@@ -3951,6 +3953,15 @@ function readPublicMysqlEnv(name: string) {
   return readPublicRuntimeEnv(`MYSQL_${name}`);
 }
 
+function hasPublicMysqlEnvSetting() {
+  return ["HOST", "PORT", "USER", "PASSWORD"].some((name) => readPublicMysqlEnv(name) !== undefined);
+}
+
+function hasMysqlConnectionSetting(source: unknown) {
+  if (!source || typeof source !== "object") return false;
+  return ["host", "port", "user", "password"].some((key) => Object.prototype.hasOwnProperty.call(source, key));
+}
+
 function sanitizeLocatorFileName(value: string) {
   return value
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
@@ -4018,6 +4029,10 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
   const dataRootConfig = await readMysqlConfigFile(getAistudyDataPath("config", "mysql.config.json"));
   const userConfig = await readMysqlConfigFile(path.join(app.getPath("userData"), "mysql.config.json"));
   const mergedConfig = { ...executableConfig, ...dataRootConfig, ...userConfig };
+  const explicitlyConfigured = hasPublicMysqlEnvSetting()
+    || hasMysqlConnectionSetting(executableConfig)
+    || hasMysqlConnectionSetting(dataRootConfig)
+    || hasMysqlConnectionSetting(userConfig);
 
   const config = {
     host: getStringSetting(readPublicMysqlEnv("HOST"), getStringSetting(readSetting(mergedConfig, "host"), "127.0.0.1")),
@@ -4026,6 +4041,7 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
     password: typeof readPublicMysqlEnv("PASSWORD") === "string"
       ? readPublicMysqlEnv("PASSWORD") ?? ""
         : getStringSetting(readSetting(mergedConfig, "password"), ""),
+    explicitlyConfigured,
     database: PUBLIC_MYSQL_DATABASE,
     courseTable: PUBLIC_MYSQL_TABLES.courses,
     courseSectionTable: PUBLIC_MYSQL_TABLES.sections,
@@ -4585,6 +4601,9 @@ async function listAppErrorLogs(limitValue: unknown): Promise<AppErrorLogEntry[]
 
 async function createMysqlRuntime(): Promise<MysqlRuntime> {
   const config = await readMysqlConfig();
+  if (app.isPackaged && !config.explicitlyConfigured) {
+    throw new Error("MySQL is not configured. The public clean package will use the local empty data store until MySQL is configured.");
+  }
   try {
     await ensureDatabase(config);
   } catch (error) {
