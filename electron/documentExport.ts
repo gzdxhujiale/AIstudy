@@ -361,6 +361,10 @@ function isColumnBlockElement(element: Record<string, unknown>) {
   return element.aistudyBlockKind === AISTUDY_COLUMN_BLOCK_KIND;
 }
 
+function isColumnBlockGapCell(cell: unknown) {
+  return isRecord(cell) && cell.disabled === true && !getCellText(cell).trim();
+}
+
 function isBorderlessTableElement(element: Record<string, unknown>) {
   return element.borderType === "empty";
 }
@@ -373,15 +377,20 @@ function createTableFromElement(element: Record<string, unknown>) {
   const rawRows = Array.isArray(element.trList) ? element.trList : [];
   const columnBlock = isColumnBlockElement(element);
   const borderless = isBorderlessTableElement(element);
+  const columnCount = Math.max(0, Math.min(3, Number(element.aistudyColumnCount) || 0));
   const subtleBorder = createTableBorder(BorderStyle.SINGLE, 1, DOCX_TABLE_BORDER_COLOR);
   const emptyBorder = createTableBorder(BorderStyle.NONE, 0, "FFFFFF");
   const rows = rawRows.map((row) => {
     const rawCells = isRecord(row) && Array.isArray(row.tdList) ? row.tdList : [];
+    const exportCells = columnBlock
+      ? rawCells.filter((cell) => !isColumnBlockGapCell(cell)).slice(0, columnCount || undefined)
+      : rawCells;
     return new TableRow({
       cantSplit: true,
-      children: rawCells.map((cell, index) => new TableCell({
+      children: exportCells.map((cell, index) => new TableCell({
         shading: columnBlock || borderless || index !== 0 ? undefined : { type: ShadingType.CLEAR, fill: "F8FAFC", color: "auto" },
-        margins: columnBlock || borderless ? { top: 80, bottom: 80, left: 140, right: 140 } : { top: 120, bottom: 120, left: 160, right: 160 },
+        margins: columnBlock ? { top: 80, bottom: 80, left: 260, right: 260 } : borderless ? { top: 80, bottom: 80, left: 140, right: 140 } : { top: 120, bottom: 120, left: 160, right: 160 },
+        width: columnBlock && exportCells.length > 0 ? { size: Math.floor(100 / exportCells.length), type: WidthType.PERCENTAGE } : undefined,
         children: [
           new Paragraph({
             children: [new TextRun({ text: getCellText(cell) || " ", font: DEFAULT_FONT, size: 22, color: DOCX_TEXT_COLOR })],
@@ -395,7 +404,7 @@ function createTableFromElement(element: Record<string, unknown>) {
   return new Table({
     rows,
     width: { size: 100, type: WidthType.PERCENTAGE },
-    layout: TableLayoutType.AUTOFIT,
+    layout: columnBlock ? TableLayoutType.FIXED : TableLayoutType.AUTOFIT,
     borders: {
       top: columnBlock || borderless ? emptyBorder : subtleBorder,
       bottom: columnBlock || borderless ? emptyBorder : subtleBorder,

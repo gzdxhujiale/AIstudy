@@ -44,15 +44,18 @@ const columnXml = await readDocumentXml(createSnapshot([
   {
     type: "table",
     value: "",
-    borderType: "internal",
+    borderType: "empty",
+    borderColor: "#94a3b8",
     aistudyBlockKind: "columns",
     aistudyColumnCount: 2,
-    colgroup: [{ width: 300 }, { width: 300 }],
+    colgroup: [{ width: 260 }, { width: 40 }, { width: 40 }, { width: 260 }],
     trList: [
       {
         height: 42,
         tdList: [
           { colspan: 1, rowspan: 1, value: [{ value: "左栏内容" }] },
+          { colspan: 1, rowspan: 1, value: [], disabled: true, deletable: false },
+          { colspan: 1, rowspan: 1, value: [], disabled: true, deletable: false, borderTypes: ["left"] },
           { colspan: 1, rowspan: 1, value: [{ value: "右栏内容" }] }
         ]
       }
@@ -64,21 +67,25 @@ const columnXml = await readDocumentXml(createSnapshot([
 assert(columnXml.includes("左栏内容") && columnXml.includes("右栏内容"), "column block text should be exported");
 assert(columnXml.includes("<w:insideV w:val=\"single\""), "column block should export an internal vertical divider");
 assert((columnXml.match(/w:val="none"/g) ?? []).length >= 5, "column block outer borders should export as none");
+assert((columnXml.match(/<w:tc\b/g) ?? []).length === 2, "column block spacer cells should not be exported as DOCX columns");
 assert(!columnXml.includes('w:fill="F8FAFC"'), "column block export should not apply normal table first-column shading");
 
 const normalizedColumnSnapshot = normalizeDocumentSnapshot(createSnapshot([
   {
     type: "table",
     value: "",
-    borderType: "internal",
+    borderType: "empty",
+    borderColor: "#94a3b8",
     aistudyBlockKind: "columns",
     aistudyColumnCount: 2,
-    colgroup: [],
+    colgroup: [{ width: 260 }, { width: 40 }, { width: 40 }, { width: 260 }],
     trList: [
       {
         height: 42,
         tdList: [
           { colspan: 1, rowspan: 1, value: [{ value: "左栏内容\n" }] },
+          { colspan: 1, rowspan: 1, value: [], disabled: true, deletable: false },
+          { colspan: 1, rowspan: 1, value: [], disabled: true, deletable: false, borderTypes: ["left"] },
           { colspan: 1, rowspan: 1, value: [{ value: "右栏内容" }] }
         ]
       }
@@ -87,8 +94,10 @@ const normalizedColumnSnapshot = normalizeDocumentSnapshot(createSnapshot([
 ]));
 const normalizedColumnBlock = normalizedColumnSnapshot.content.main[0];
 assert(normalizedColumnBlock.aistudyBlockKind === "columns", "MCP snapshot normalization should preserve column block metadata");
-assert(normalizedColumnBlock.borderType === "internal", "MCP snapshot normalization should preserve column block dividers");
+assert(normalizedColumnBlock.borderType === "empty", "MCP snapshot normalization should preserve borderless column block shell");
 assert(Array.isArray(normalizedColumnBlock.trList?.[0]?.tdList), "MCP snapshot normalization should preserve table cells");
+assert(normalizedColumnBlock.trList[0].tdList[2].borderTypes?.includes("left"), "MCP snapshot normalization should preserve the center divider cell border");
+assert(normalizedColumnBlock.trList[0].tdList[1].disabled === true, "MCP snapshot normalization should preserve column spacer cells");
 
 const normalTableXml = await readDocumentXml(createSnapshot([
   {

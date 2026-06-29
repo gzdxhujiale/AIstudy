@@ -26,6 +26,9 @@ const DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE = "data-aistudy-document-scroll-id";
 const FAST_SELECTION_CHANGE_EVENT = "aistudy:selection-range-change";
 const FAST_SELECTION_VIEWPORT_BUFFER = 96;
 const DOCUMENT_COLUMN_BLOCK_KIND = "columns";
+const DOCUMENT_COLUMN_DIVIDER_GAP = 80;
+const DOCUMENT_COLUMN_MIN_DIVIDER_GAP = 32;
+const DOCUMENT_COLUMN_MIN_CONTENT_WIDTH = 180;
 
 type CanvasEditorModule = typeof import("@hufe921/canvas-editor");
 type CanvasEditorInstance = InstanceType<CanvasEditorModule["default"]>;
@@ -42,6 +45,21 @@ type InlineStyleKey = "font" | "size" | "bold" | "color" | "highlight" | "italic
 type KnowledgeDocumentColumnBlockElement = IElement & {
   aistudyBlockKind: typeof DOCUMENT_COLUMN_BLOCK_KIND;
   aistudyColumnCount: KnowledgeDocumentColumnCount;
+};
+type KnowledgeDocumentColumnTableCell = {
+  colspan: number;
+  rowspan: number;
+  value: IElement[];
+  borderTypes?: unknown[];
+  disabled?: boolean;
+  deletable?: boolean;
+};
+type KnowledgeDocumentColumnTableRow = {
+  height?: number;
+  tdList?: KnowledgeDocumentColumnTableCell[];
+};
+const DOCUMENT_GET_VALUE_OPTIONS = {
+  extraPickAttrs: ["aistudyBlockKind", "aistudyColumnCount"] as unknown as Array<keyof IElement>
 };
 
 type CanvasDocumentEvents = {
@@ -271,6 +289,32 @@ function cleanColumnCellElement(element: IElement): IElement {
   return next;
 }
 
+function isDocumentColumnBlockElement(element: IElement): element is KnowledgeDocumentColumnBlockElement {
+  return (element as { aistudyBlockKind?: unknown }).aistudyBlockKind === DOCUMENT_COLUMN_BLOCK_KIND;
+}
+
+function normalizeDocumentColumnCount(value: unknown): KnowledgeDocumentColumnCount {
+  return value === 3 ? 3 : 2;
+}
+
+function getColumnBlockRows(element: IElement): KnowledgeDocumentColumnTableRow[] {
+  const rows = (element as { trList?: unknown }).trList;
+  return Array.isArray(rows) ? (rows as KnowledgeDocumentColumnTableRow[]) : [];
+}
+
+function getColumnCellElements(cell: KnowledgeDocumentColumnTableCell | undefined): IElement[] {
+  if (!cell || !Array.isArray(cell.value)) return [];
+  return cell.value.filter((element): element is IElement => Boolean(element && typeof element === "object")).map(cleanColumnCellElement);
+}
+
+function getColumnBlockContentValues(element: KnowledgeDocumentColumnBlockElement, columns: KnowledgeDocumentColumnCount): IElement[][] {
+  const row = getColumnBlockRows(element)[0];
+  const cells = Array.isArray(row?.tdList) ? row.tdList : [];
+  const contentCells = cells.filter((cell) => !cell.disabled);
+
+  return Array.from({ length: columns }, (_, index) => getColumnCellElements(contentCells[index]));
+}
+
 function splitElementByLineBreaks(element: IElement): IElement[] {
   if (!isTextElement(element)) return [cleanColumnCellElement(element)];
   const value = toElementText(element.value);
@@ -457,13 +501,13 @@ function createSnapshotFromEditorData(data: unknown): KnowledgeDocumentSnapshot 
 }
 
 function toSnapshot(editor: CanvasEditorInstance): KnowledgeDocumentSnapshot {
-  const value = editor.command.getValue();
+  const value = editor.command.getValue(DOCUMENT_GET_VALUE_OPTIONS);
   return createSnapshotFromEditorData(value.data);
 }
 
 async function toSnapshotAsync(editor: CanvasEditorInstance): Promise<KnowledgeDocumentSnapshot> {
   try {
-    const value = await editor.command.getValueAsync();
+    const value = await editor.command.getValueAsync(DOCUMENT_GET_VALUE_OPTIONS);
     return createSnapshotFromEditorData(value.data);
   } catch {
     return toSnapshot(editor);
@@ -589,7 +633,8 @@ export async function createCanvasDocumentEditor(
     ListStyle,
     TitleLevel,
     ElementType,
-    TableBorder
+    TableBorder,
+    TdBorder
   } = await loadCanvasEditor();
   const pageSize = getDocumentPageSize(container, options);
   const scrollContainer = createDocumentScrollContainerSelector(container);
@@ -615,43 +660,91 @@ export async function createCanvasDocumentEditor(
       inheritStyle: true
     }
   };
-  const createColumnBlockElement = (columns: KnowledgeDocumentColumnCount): KnowledgeDocumentColumnBlockElement => {
+  const getPageInnerWidth = () => {
     const margins = Array.isArray(editorOptions.margins) ? editorOptions.margins : [0, 0, 0, 0];
-    const pageInnerWidth = Math.max(240, pageSize.width - Number(margins[1] ?? 0) - Number(margins[3] ?? 0));
-    const columnWidth = pageInnerWidth / columns;
+    return Math.max(240, pageSize.width - Number(margins[1] ?? 0) - Number(margins[3] ?? 0));
+  };
+  const getColumnDividerGap = (pageInnerWidth: number, columns: KnowledgeDocumentColumnCount) => {
+    const sectionWidth = pageInnerWidth / columns;
+    const maxGap = Math.max(DOCUMENT_COLUMN_MIN_DIVIDER_GAP, sectionWidth - DOCUMENT_COLUMN_MIN_CONTENT_WIDTH);
+    return Math.max(DOCUMENT_COLUMN_MIN_DIVIDER_GAP, Math.min(DOCUMENT_COLUMN_DIVIDER_GAP, maxGap));
+  };
+  const createColumnBlockElement = (
+    columns: KnowledgeDocumentColumnCount,
+    values: IElement[][] = [],
+    rowHeight = editorOptions.table?.defaultTrMinHeight ?? 42
+  ): KnowledgeDocumentColumnBlockElement => {
+    const pageInnerWidth = getPageInnerWidth();
+    const sectionWidth = pageInnerWidth / columns;
+    const dividerGap = getColumnDividerGap(pageInnerWidth, columns);
+    const dividerHalfGap = dividerGap / 2;
+    const colgroup: Array<{ width: number }> = [];
+    const tdList: KnowledgeDocumentColumnTableCell[] = [];
+
+    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+      const leftReserve = columnIndex > 0 ? dividerHalfGap : 0;
+      const rightReserve = columnIndex < columns - 1 ? dividerHalfGap : 0;
+      const contentWidth = Math.max(120, sectionWidth - leftReserve - rightReserve);
+      colgroup.push({ width: contentWidth });
+      tdList.push({
+        colspan: 1,
+        rowspan: 1,
+        value: values[columnIndex] ?? []
+      });
+
+      if (columnIndex < columns - 1) {
+        colgroup.push({ width: dividerHalfGap }, { width: dividerHalfGap });
+        tdList.push({
+          colspan: 1,
+          rowspan: 1,
+          value: [],
+          disabled: true,
+          deletable: false
+        });
+        tdList.push({
+          colspan: 1,
+          rowspan: 1,
+          value: [],
+          disabled: true,
+          deletable: false,
+          borderTypes: [TdBorder.LEFT]
+        });
+      }
+    }
 
     return {
       type: ElementType.TABLE,
       value: "",
       aistudyBlockKind: DOCUMENT_COLUMN_BLOCK_KIND,
       aistudyColumnCount: columns,
-      borderType: TableBorder.INTERNAL,
-      colgroup: Array.from({ length: columns }, () => ({ width: columnWidth })),
+      borderType: TableBorder.EMPTY,
+      borderColor: "#94a3b8",
+      colgroup,
       trList: [
         {
-          height: editorOptions.table?.defaultTrMinHeight ?? 42,
-          tdList: Array.from({ length: columns }, () => ({
-            colspan: 1,
-            rowspan: 1,
-            value: []
-          }))
+          height: rowHeight,
+          tdList
         }
       ]
     } as KnowledgeDocumentColumnBlockElement;
   };
   const createColumnBlockFromValues = (columns: KnowledgeDocumentColumnCount, values: IElement[][]) => {
-    const block = createColumnBlockElement(columns);
-    const row = block.trList?.[0];
-    if (row) {
-      row.tdList = row.tdList.map((cell, index) => ({
-        ...cell,
-        value: values[index] ?? []
-      }));
-    }
-    return block;
+    return createColumnBlockElement(columns, values);
+  };
+  const normalizeColumnBlockElement = (element: KnowledgeDocumentColumnBlockElement): KnowledgeDocumentColumnBlockElement => {
+    const columns = normalizeDocumentColumnCount(element.aistudyColumnCount);
+    const row = getColumnBlockRows(element)[0];
+    const rowHeight = Number.isFinite(row?.height) ? Number(row?.height) : (editorOptions.table?.defaultTrMinHeight ?? 42);
+    return createColumnBlockElement(columns, getColumnBlockContentValues(element, columns), rowHeight);
+  };
+  const normalizeColumnBlocksInEditorData = (content: IEditorData): IEditorData => {
+    return {
+      ...content,
+      main: content.main.map((element) => (isDocumentColumnBlockElement(element) ? normalizeColumnBlockElement(element) : element))
+    };
   };
   const convertDocumentToColumnBlock = (columns: KnowledgeDocumentColumnCount) => {
-    const content = normalizeLiveEditorData(editor.command.getValue().data as KnowledgeDocumentContent);
+    const content = normalizeLiveEditorData(editor.command.getValue(DOCUMENT_GET_VALUE_OPTIONS).data as KnowledgeDocumentContent);
     const main = content.main.filter((element) => !isBlankTextElement(element));
     if (!canConvertMainToColumnBlock(main)) {
       editor.command.executeInsertElementList([createColumnBlockElement(columns)]);
@@ -667,7 +760,7 @@ export async function createCanvasDocumentEditor(
       { isSetCursor: true }
     );
   };
-  const editor = new Editor(container, normalizeEditorData(normalizeSnapshot(snapshot).content), editorOptions);
+  const editor = new Editor(container, normalizeColumnBlocksInEditorData(normalizeEditorData(normalizeSnapshot(snapshot).content)), editorOptions);
   const editorContainer = editor.command.getContainer();
   const selectionOverlay = document.createElement("div");
   selectionOverlay.style.position = "absolute";
@@ -801,7 +894,7 @@ export async function createCanvasDocumentEditor(
   const normalizeCurrentContentAsync = async (requestId: number) => {
     if (isNormalizingInputStyle) return;
     const range = editor.command.getRange();
-    const currentValue = await editor.command.getValueAsync();
+    const currentValue = await editor.command.getValueAsync(DOCUMENT_GET_VALUE_OPTIONS);
     if (requestId !== normalizationRequestId || isNormalizingInputStyle) return;
 
     let nextContent = normalizeLiveEditorData(currentValue.data);
@@ -935,7 +1028,7 @@ export async function createCanvasDocumentEditor(
     }
 
     if (rowElements.length === 0) {
-      const elementList = normalizeEditorData(editor.command.getValue().data).main;
+      const elementList = normalizeEditorData(editor.command.getValue(DOCUMENT_GET_VALUE_OPTIONS).data).main;
       if (elementList.length === 0) return false;
       const startIndex = Math.max(0, Math.min(range.startIndex, elementList.length - 1));
       const endIndex = Math.max(startIndex, Math.min(range.endIndex, elementList.length - 1));

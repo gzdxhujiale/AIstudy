@@ -19,7 +19,7 @@ Current files:
 - `knowledge_documents` stores the current pointer and metadata only; actual content belongs to snapshots.
 - Large images and attachments must not be stored as long inline base64 in document JSON.
 - DOCX export is a read-only projection of the current node document snapshot; it must not mutate the editor snapshot or document binding.
-- Column layout is currently block-level: the editor converts simple text documents into a 1-row, 2/3-column canvas-editor table marked as `aistudyBlockKind: "columns"` with an internal divider line; complex documents fall back to inserting an empty column block instead of rewriting tables or images. It is saved in the normal snapshot, reopens through the existing document loader, and exports to DOCX with only the internal column divider. It is not a page/section-level flowing Word columns implementation.
+- Column layout is currently block-level: the editor converts simple text documents into a 1-row canvas-editor table marked as `aistudyBlockKind: "columns"`. Content columns are split by full page inner width, with disabled spacer cells on both sides of each center divider so text does not touch the divider. Complex documents fall back to inserting an empty column block instead of rewriting tables or images. It is saved in the normal snapshot, reopens through the existing document loader, and exports to DOCX as content columns with only the internal divider. It is not a page/section-level flowing Word columns implementation.
 
 ## User Flow
 
