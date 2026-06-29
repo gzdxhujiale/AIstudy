@@ -26,7 +26,7 @@
     "qa:error-codes": "npm run build && node scripts/qa/validate-error-codes.mjs",
     "qa:textbook": "npm run build && node scripts/qa/validate-textbook-regressions.mjs",
     "pack": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist",
-    "dist": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/ensure-installer-resources.ps1 && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
+    "dist": "npm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
     "dist:oneclick": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/close-and-dist.ps1",
     "shortcuts:refresh": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/refresh-shortcuts.ps1",
     "setup:doctor": "node scripts/setup/check-dev-environment.mjs",

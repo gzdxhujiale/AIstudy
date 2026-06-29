@@ -507,6 +507,8 @@ npm run github:sync:fix     # 按脚本规则修复 GitHub 发布同步问题
 写出 release\build-manifest.json，记录版本、commit、dirty 状态和产物 hash
 ```
 
+当前 Windows 主安装包是轻量包，不再内嵌 `mysql-8.4.7-winx64.zip` 和 `vc_redist.x64.exe`。安装时 `build\installer\install-aistudy-mysql-runtime.ps1` 会按需在线下载/配置 MySQL 与 VC++ 运行依赖；依赖安装失败只记录日志并允许应用继续安装，核心工作区仍可进入本机模式。后续如果要做完全离线安装，应单独拆一个依赖包，不要把离线 MySQL zip 重新塞回主安装包。
+
 Codex 接手文档同步：
 
 ```powershell

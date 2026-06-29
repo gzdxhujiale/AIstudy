@@ -52,4 +52,5 @@ npm run setup:doctor
 - 开发依赖安装统一走 `setup:install`。
 - 打包统一走 `dist:oneclick`，不要手工绕过项目本地 cache。
 - `dist:oneclick` 会清理安装源运行数据并写出 `release/build-manifest.json`，用于追溯安装包版本、commit、dirty 状态和产物 hash。
+- 主安装包保持轻量，不内嵌 MySQL 离线 zip 和 VC++ 安装包；运行依赖由安装脚本在目标机器按需在线下载/配置，失败时应用仍可先以本机模式打开。
 - MySQL 是增强同步能力，不是打开应用的前置条件。

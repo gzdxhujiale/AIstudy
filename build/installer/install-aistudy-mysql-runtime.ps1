@@ -1,7 +1,8 @@
 param(
   [string]$MysqlZipPath = "",
   [string]$VcRedistPath = "",
-  [string]$AistudyInstallDir = ""
+  [string]$AistudyInstallDir = "",
+  [switch]$AllowDownload
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +21,10 @@ $mysqlIniPath = Join-Path $installRoot "my.ini"
 $installLogPath = Join-Path $env:ProgramData "AIstudy\install-aistudy-public.log"
 $aistudyDataRoot = Join-Path $env:ProgramData "AIstudy\AIstudyPublicData"
 $aistudyUserDataRoot = Join-Path $env:ProgramData "AIstudy\AIstudyUserData"
+$dependencyCacheRoot = Join-Path $env:ProgramData "AIstudy\installer-cache"
+$mysqlDownloadUrl = "https://dev.mysql.com/get/Downloads/MySQL-8.4/mysql-8.4.7-winx64.zip"
+$mysqlSha256 = "FD9BDBD4B5A878D31C8E4067078BD60665B1B3C4677FA1F099416D194B458AFF"
+$vcRedistDownloadUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 
 function Write-Step([string]$message) {
   $line = "[AIstudy] $message"
@@ -39,9 +44,69 @@ function Write-Failure([string]$message) {
   }
 }
 
+function Test-InstallerFileHash([string]$path, [string]$expectedSha256) {
+  if ([string]::IsNullOrWhiteSpace($expectedSha256)) {
+    return $true
+  }
+  if (-not (Test-Path -Path $path)) {
+    return $false
+  }
+  $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
+  return $actual.Equals($expectedSha256, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Resolve-InstallerResource([string]$path, [string]$fileName, [string]$url, [string]$expectedSha256, [bool]$required) {
+  if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -Path $path)) {
+    if (Test-InstallerFileHash $path $expectedSha256) {
+      return $path
+    }
+    if ($required) {
+      throw "Installer resource hash mismatch: $path"
+    }
+    Write-Step "Bundled installer resource hash mismatch; continuing without it."
+    return ""
+  }
+
+  $cachedPath = Join-Path $dependencyCacheRoot $fileName
+  if (Test-Path -Path $cachedPath) {
+    if (Test-InstallerFileHash $cachedPath $expectedSha256) {
+      return $cachedPath
+    }
+    Remove-Item -LiteralPath $cachedPath -Force -ErrorAction SilentlyContinue
+  }
+
+  if (-not $AllowDownload) {
+    if ($required) {
+      throw "Installer resource is missing: $fileName"
+    }
+    return ""
+  }
+
+  try {
+    New-Item -ItemType Directory -Force -Path $dependencyCacheRoot | Out-Null
+    $downloadPath = Join-Path $dependencyCacheRoot ($fileName + ".download")
+    Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
+    Write-Step ("Downloading installer dependency: {0}" -f $fileName)
+    Invoke-WebRequest -Uri $url -OutFile $downloadPath -UseBasicParsing
+    if (-not (Test-InstallerFileHash $downloadPath $expectedSha256)) {
+      Remove-Item -LiteralPath $downloadPath -Force -ErrorAction SilentlyContinue
+      throw "Downloaded resource hash mismatch: $fileName"
+    }
+    Move-Item -LiteralPath $downloadPath -Destination $cachedPath -Force
+    return $cachedPath
+  } catch {
+    if ($required) {
+      throw $_
+    }
+    Write-Step ("Dependency download skipped: {0}" -f $_.Exception.Message)
+    return ""
+  }
+}
+
 function Install-VcRedist {
+  $VcRedistPath = Resolve-InstallerResource $VcRedistPath "vc_redist.x64.exe" $vcRedistDownloadUrl "" $false
   if ([string]::IsNullOrWhiteSpace($VcRedistPath) -or -not (Test-Path -Path $VcRedistPath)) {
-    Write-Step "VC++ Redistributable package not bundled; continuing."
+    Write-Step "VC++ Redistributable package is unavailable; continuing."
     return
   }
 
@@ -287,6 +352,7 @@ function Ensure-AistudyDatabase([int]$port) {
 }
 
 function Install-AistudyMysql {
+  $MysqlZipPath = Resolve-InstallerResource $MysqlZipPath "mysql-8.4.7-winx64.zip" $mysqlDownloadUrl $mysqlSha256 $true
   if ([string]::IsNullOrWhiteSpace($MysqlZipPath) -or -not (Test-Path -Path $MysqlZipPath)) {
     throw "MySQL offline package is missing."
   }

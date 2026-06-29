@@ -282,10 +282,12 @@ The public version has moved beyond the first milestone. Current shipped surface
 - MCP is a first-class module with renderer UI, Electron controller, external stdio server, HTTP remote access, Tailscale LAN exposure, read/edit tool boundaries, permissions, and call monitoring.
 - Tailscale LAN access is not public internet access. It uses Tailscale Serve for same-tailnet devices and must keep remote edit permissions off by default.
 - App updates preserve runtime data and database configuration. Version updates must not overwrite user courses, mind maps, documents, MCP remote state, or MySQL config.
+- The Windows installer is a slim app package. MySQL and VC++ runtime setup is handled by `build/installer/install-aistudy-mysql-runtime.ps1` during install and may download runtime dependencies on the target machine; dependency setup failure must not block opening the app.
 - The main knowledge workspace has collapsible left knowledge-base pane and right catalog pane. Collapsing side panes must not collapse or zero-width the central mind-map/document canvas.
 - Storage boundaries are declared in `electron/storageBoundary.ts` and checked by `npm run qa:data-boundaries` during build.
 - ChatGPT/KaTeX/MathML/plain-text math paste normalization lives in `src/renderer/features/mathInput/` and is checked by `npm run qa:math-clipboard` during build.
 - `dist:oneclick` removes runtime data from the installer source and writes `release/build-manifest.json` with version, commit, dirty state, and artifact hashes.
+- Do not re-embed `mysql-8.4.7-winx64.zip` or `vc_redist.x64.exe` into the main NSIS package unless explicitly building a separate offline dependency package.
 
 ## Current Module Map
 
