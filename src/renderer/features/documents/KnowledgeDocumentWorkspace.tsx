@@ -9,6 +9,8 @@ import {
   Bot,
   ChevronLeft,
   ChevronRight,
+  Columns2,
+  Columns3,
   FileDown,
   Highlighter,
   Italic,
@@ -22,6 +24,7 @@ import {
   Strikethrough,
   Subscript,
   Superscript,
+  Table2,
   Underline,
   Undo2,
   Upload,
@@ -42,6 +45,7 @@ import {
 } from "../../lib/ViewportScrollbars";
 import type {
   KnowledgeDocumentEditorHandle,
+  KnowledgeDocumentColumnCount,
   KnowledgeDocumentFormatState,
   KnowledgeDocumentRecord,
   KnowledgeDocumentSaveInput,
@@ -333,6 +337,7 @@ type DocumentFormatPanelProps = {
   onAlignment: (alignment: DocumentAlignment) => void;
   onList: (type: DocumentListType) => void;
   onInsertTable: () => void;
+  onInsertColumnBlock: (columns: KnowledgeDocumentColumnCount) => void;
   onStartSingleUseFormatBrush: () => void;
   onToggleReusableFormatBrush: () => void;
 };
@@ -352,6 +357,7 @@ function DocumentFormatPanel({
   onAlignment,
   onList,
   onInsertTable,
+  onInsertColumnBlock,
   onStartSingleUseFormatBrush,
   onToggleReusableFormatBrush
 }: DocumentFormatPanelProps) {
@@ -499,8 +505,17 @@ function DocumentFormatPanel({
       <section className="mindmap-format-section">
         <div className="mindmap-format-section-title">插入</div>
         <div className="mindmap-format-actions">
-          <button type="button" onClick={onInsertTable} disabled={disabled}>
-            表格
+          <button type="button" title="表格" onClick={onInsertTable} disabled={disabled}>
+            <Table2 size={14} />
+            <span>表格</span>
+          </button>
+          <button type="button" title="双栏" onClick={() => onInsertColumnBlock(2)} disabled={disabled}>
+            <Columns2 size={14} />
+            <span>双栏</span>
+          </button>
+          <button type="button" title="三栏" onClick={() => onInsertColumnBlock(3)} disabled={disabled}>
+            <Columns3 size={14} />
+            <span>三栏</span>
           </button>
           <button type="button" onClick={() => onCommand("pageBreak")} disabled={disabled}>
             分页
@@ -1583,6 +1598,7 @@ export function KnowledgeDocumentWorkspace({
           onAlignment={(alignment) => editorRef.current?.setAlignment(alignment)}
           onList={(type) => editorRef.current?.setList(type)}
           onInsertTable={() => editorRef.current?.insertTable(3, 3)}
+          onInsertColumnBlock={(columns) => editorRef.current?.insertColumnBlock(columns)}
           onStartSingleUseFormatBrush={startSingleUseFormatBrush}
           onToggleReusableFormatBrush={toggleReusableFormatBrush}
         />,

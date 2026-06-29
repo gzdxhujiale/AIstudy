@@ -41,7 +41,7 @@ Keep this file synchronized with `electron/mcp/controller.ts`, `electron/mcp/rem
 
 ## Node Document Edits
 
-- `write_node_document`: create new content or replace the whole document only when `replaceExisting: true` is explicitly approved.
+- `write_node_document`: create new content or replace the whole document only when `replaceExisting: true` is explicitly approved. Advanced snapshot replacement should start from `read_node_document.document.snapshot` and preserves canvas-editor tables, column blocks with internal dividers, and cell content.
 - `append_node_document`: append clean text or Markdown-style headings.
 - `format_node_document`: style-only cleanup; must preserve every editor element `value` exactly.
 - `update_node_document_style`: simple full-document font size, color, bold, italic, or underline changes.

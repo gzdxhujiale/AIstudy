@@ -1,6 +1,7 @@
 import type { IEditorData, IElement, IRangeStyle } from "@hufe921/canvas-editor";
 import type {
   KnowledgeDocumentAlignment,
+  KnowledgeDocumentColumnCount,
   KnowledgeDocumentContent,
   KnowledgeDocumentEditorHandle,
   KnowledgeDocumentFormatState,
@@ -24,6 +25,7 @@ const FORCE_TEXT_RUN_SPLIT_LENGTH = MAX_TEXT_RUN_LENGTH * 2;
 const DOCUMENT_SCROLL_CONTAINER_ATTRIBUTE = "data-aistudy-document-scroll-id";
 const FAST_SELECTION_CHANGE_EVENT = "aistudy:selection-range-change";
 const FAST_SELECTION_VIEWPORT_BUFFER = 96;
+const DOCUMENT_COLUMN_BLOCK_KIND = "columns";
 
 type CanvasEditorModule = typeof import("@hufe921/canvas-editor");
 type CanvasEditorInstance = InstanceType<CanvasEditorModule["default"]>;
@@ -37,6 +39,10 @@ type CanvasRangeContext = {
   rangeRects?: CanvasRangeRect[];
 } | null;
 type InlineStyleKey = "font" | "size" | "bold" | "color" | "highlight" | "italic" | "underline" | "strikeout" | "textDecoration";
+type KnowledgeDocumentColumnBlockElement = IElement & {
+  aistudyBlockKind: typeof DOCUMENT_COLUMN_BLOCK_KIND;
+  aistudyColumnCount: KnowledgeDocumentColumnCount;
+};
 
 type CanvasDocumentEvents = {
   onSnapshotChanged?: (snapshot: KnowledgeDocumentSnapshot) => void;
@@ -252,6 +258,53 @@ function getVisibleElementText(element: IElement) {
 
 function isBlankTextElement(element: IElement) {
   return isTextElement(element) && getVisibleElementText(element).length === 0;
+}
+
+function cleanColumnCellElement(element: IElement): IElement {
+  const next = { ...element } as IElement;
+  delete next.id;
+  delete next.tableId;
+  delete next.trId;
+  delete next.tdId;
+  delete next.pagingId;
+  delete next.pagingIndex;
+  return next;
+}
+
+function splitElementByLineBreaks(element: IElement): IElement[] {
+  if (!isTextElement(element)) return [cleanColumnCellElement(element)];
+  const value = toElementText(element.value);
+  if (!value) return [];
+
+  const parts: string[] = [];
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "\n") continue;
+    parts.push(value.slice(start, index + 1));
+    start = index + 1;
+  }
+  if (start < value.length) parts.push(value.slice(start));
+
+  return parts
+    .filter((part) => part.length > 0)
+    .map((part) => ({ ...cleanColumnCellElement(element), value: part } as IElement));
+}
+
+function splitElementsIntoColumns(elements: IElement[], columns: KnowledgeDocumentColumnCount): IElement[][] {
+  const lineElements = elements.flatMap(splitElementByLineBreaks).filter((element) => !isBlankTextElement(element));
+  if (lineElements.length === 0) return Array.from({ length: columns }, () => []);
+
+  const perColumn = Math.ceil(lineElements.length / columns);
+  return Array.from({ length: columns }, (_, columnIndex) => {
+    const start = columnIndex * perColumn;
+    return lineElements.slice(start, start + perColumn);
+  });
+}
+
+function canConvertMainToColumnBlock(elements: IElement[]) {
+  const visibleTextCount = elements.filter((element) => isTextElement(element) && !isBlankTextElement(element)).length;
+  if (visibleTextCount === 0) return false;
+  return elements.every((element) => isTextElement(element) || isBlankTextElement(element));
 }
 
 function findParagraphBounds(elementList: IElement[], index: number) {
@@ -525,7 +578,19 @@ export async function createCanvasDocumentEditor(
   events: CanvasDocumentEvents,
   options: CanvasDocumentEditorOptions = {}
 ): Promise<KnowledgeDocumentEditorHandle> {
-  const { default: Editor, EditorMode, PageMode, PaperDirection, RenderMode, RowFlex, ListType, ListStyle, TitleLevel } = await loadCanvasEditor();
+  const {
+    default: Editor,
+    EditorMode,
+    PageMode,
+    PaperDirection,
+    RenderMode,
+    RowFlex,
+    ListType,
+    ListStyle,
+    TitleLevel,
+    ElementType,
+    TableBorder
+  } = await loadCanvasEditor();
   const pageSize = getDocumentPageSize(container, options);
   const scrollContainer = createDocumentScrollContainerSelector(container);
   const editorOptions: CanvasEditorOptions = {
@@ -549,6 +614,58 @@ export async function createCanvasDocumentEditor(
     list: {
       inheritStyle: true
     }
+  };
+  const createColumnBlockElement = (columns: KnowledgeDocumentColumnCount): KnowledgeDocumentColumnBlockElement => {
+    const margins = Array.isArray(editorOptions.margins) ? editorOptions.margins : [0, 0, 0, 0];
+    const pageInnerWidth = Math.max(240, pageSize.width - Number(margins[1] ?? 0) - Number(margins[3] ?? 0));
+    const columnWidth = pageInnerWidth / columns;
+
+    return {
+      type: ElementType.TABLE,
+      value: "",
+      aistudyBlockKind: DOCUMENT_COLUMN_BLOCK_KIND,
+      aistudyColumnCount: columns,
+      borderType: TableBorder.INTERNAL,
+      colgroup: Array.from({ length: columns }, () => ({ width: columnWidth })),
+      trList: [
+        {
+          height: editorOptions.table?.defaultTrMinHeight ?? 42,
+          tdList: Array.from({ length: columns }, () => ({
+            colspan: 1,
+            rowspan: 1,
+            value: []
+          }))
+        }
+      ]
+    } as KnowledgeDocumentColumnBlockElement;
+  };
+  const createColumnBlockFromValues = (columns: KnowledgeDocumentColumnCount, values: IElement[][]) => {
+    const block = createColumnBlockElement(columns);
+    const row = block.trList?.[0];
+    if (row) {
+      row.tdList = row.tdList.map((cell, index) => ({
+        ...cell,
+        value: values[index] ?? []
+      }));
+    }
+    return block;
+  };
+  const convertDocumentToColumnBlock = (columns: KnowledgeDocumentColumnCount) => {
+    const content = normalizeLiveEditorData(editor.command.getValue().data as KnowledgeDocumentContent);
+    const main = content.main.filter((element) => !isBlankTextElement(element));
+    if (!canConvertMainToColumnBlock(main)) {
+      editor.command.executeInsertElementList([createColumnBlockElement(columns)]);
+      return;
+    }
+
+    const columnValues = splitElementsIntoColumns(main, columns);
+    editor.command.executeSetValue(
+      {
+        ...content,
+        main: [createColumnBlockFromValues(columns, columnValues)]
+      },
+      { isSetCursor: true }
+    );
   };
   const editor = new Editor(container, normalizeEditorData(normalizeSnapshot(snapshot).content), editorOptions);
   const editorContainer = editor.command.getContainer();
@@ -1094,6 +1211,9 @@ export async function createCanvasDocumentEditor(
     cancelBlankListOnEnter,
     insertTable: (rows, cols) => {
       runFormatCommand(() => editor.command.executeInsertTable(rows, cols));
+    },
+    insertColumnBlock: (columns) => {
+      runFormatCommand(() => convertDocumentToColumnBlock(columns));
     },
     startFormatPainter: (reusable) => {
       if (!restoreRememberedRange()) return false;

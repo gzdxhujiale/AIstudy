@@ -2891,6 +2891,10 @@ h3 {
 
 .mindmap-format-wide-button,
 .mindmap-format-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   height: 30px;
   border-color: rgba(123, 145, 169, 0.22);
   background: #ffffff;

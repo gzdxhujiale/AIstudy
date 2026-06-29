@@ -1710,8 +1710,15 @@ const DOCUMENT_TEMPLATE_STYLE_KEYS = new Set([
   "url",
   "colgroup",
   "trList",
+  "borderType",
+  "borderColor",
+  "borderWidth",
+  "borderExternalWidth",
+  "translateX",
   "width",
-  "height"
+  "height",
+  "aistudyBlockKind",
+  "aistudyColumnCount"
 ]);
 
 const DOCUMENT_ELEMENT_NESTED_CONTAINER_KEYS = new Set([
@@ -2110,7 +2117,11 @@ function extractDocumentText(value) {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(extractDocumentText).join("");
   if (!value || typeof value !== "object") return "";
-  let text = typeof value.value === "string" ? value.value : "";
+  let text = typeof value.value === "string"
+    ? value.value
+    : Array.isArray(value.value) || value.value && typeof value.value === "object"
+      ? extractDocumentText(value.value)
+      : "";
   for (const [key, child] of Object.entries(value)) {
     if (key === "value" || DOCUMENT_TEXT_SKIP_KEYS.has(key) || DOCUMENT_TEXT_METADATA_CONTAINER_KEYS.has(key)) continue;
     if (DOCUMENT_TEXT_CONTAINER_KEYS.has(key) || Array.isArray(child)) {

@@ -78,6 +78,7 @@ const DOCX_PAGE_WIDTH = 11906;
 const DOCX_PAGE_HEIGHT = 16838;
 const DOCX_TEXT_COLOR = "1F2937";
 const DOCX_TABLE_BORDER_COLOR = "CBD5E1";
+const AISTUDY_COLUMN_BLOCK_KIND = "columns";
 const DOCX_TWIP_PER_PT = 20;
 const DOCX_PX_TO_PT = 0.75;
 const DOCX_EDITOR_MARGIN_TWIP = 960;
@@ -356,15 +357,31 @@ function getCellText(cell: unknown) {
   return readElementText(cell.value ?? cell.valueList ?? cell.children ?? cell);
 }
 
+function isColumnBlockElement(element: Record<string, unknown>) {
+  return element.aistudyBlockKind === AISTUDY_COLUMN_BLOCK_KIND;
+}
+
+function isBorderlessTableElement(element: Record<string, unknown>) {
+  return element.borderType === "empty";
+}
+
+function createTableBorder(style: (typeof BorderStyle)[keyof typeof BorderStyle], size: number, color: string) {
+  return { style, size, color };
+}
+
 function createTableFromElement(element: Record<string, unknown>) {
   const rawRows = Array.isArray(element.trList) ? element.trList : [];
+  const columnBlock = isColumnBlockElement(element);
+  const borderless = isBorderlessTableElement(element);
+  const subtleBorder = createTableBorder(BorderStyle.SINGLE, 1, DOCX_TABLE_BORDER_COLOR);
+  const emptyBorder = createTableBorder(BorderStyle.NONE, 0, "FFFFFF");
   const rows = rawRows.map((row) => {
     const rawCells = isRecord(row) && Array.isArray(row.tdList) ? row.tdList : [];
     return new TableRow({
       cantSplit: true,
       children: rawCells.map((cell, index) => new TableCell({
-        shading: index === 0 ? { type: ShadingType.CLEAR, fill: "F8FAFC", color: "auto" } : undefined,
-        margins: { top: 120, bottom: 120, left: 160, right: 160 },
+        shading: columnBlock || borderless || index !== 0 ? undefined : { type: ShadingType.CLEAR, fill: "F8FAFC", color: "auto" },
+        margins: columnBlock || borderless ? { top: 80, bottom: 80, left: 140, right: 140 } : { top: 120, bottom: 120, left: 160, right: 160 },
         children: [
           new Paragraph({
             children: [new TextRun({ text: getCellText(cell) || " ", font: DEFAULT_FONT, size: 22, color: DOCX_TEXT_COLOR })],
@@ -380,14 +397,14 @@ function createTableFromElement(element: Record<string, unknown>) {
     width: { size: 100, type: WidthType.PERCENTAGE },
     layout: TableLayoutType.AUTOFIT,
     borders: {
-      top: { style: BorderStyle.SINGLE, size: 1, color: DOCX_TABLE_BORDER_COLOR },
-      bottom: { style: BorderStyle.SINGLE, size: 1, color: DOCX_TABLE_BORDER_COLOR },
-      left: { style: BorderStyle.SINGLE, size: 1, color: DOCX_TABLE_BORDER_COLOR },
-      right: { style: BorderStyle.SINGLE, size: 1, color: DOCX_TABLE_BORDER_COLOR },
-      insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: DOCX_TABLE_BORDER_COLOR },
-      insideVertical: { style: BorderStyle.SINGLE, size: 1, color: DOCX_TABLE_BORDER_COLOR }
+      top: columnBlock || borderless ? emptyBorder : subtleBorder,
+      bottom: columnBlock || borderless ? emptyBorder : subtleBorder,
+      left: columnBlock || borderless ? emptyBorder : subtleBorder,
+      right: columnBlock || borderless ? emptyBorder : subtleBorder,
+      insideHorizontal: columnBlock || borderless ? emptyBorder : subtleBorder,
+      insideVertical: columnBlock ? subtleBorder : borderless ? emptyBorder : subtleBorder
     },
-    margins: { top: 120, bottom: 120, left: 120, right: 120 }
+    margins: columnBlock || borderless ? { top: 80, bottom: 80, left: 80, right: 80 } : { top: 120, bottom: 120, left: 120, right: 120 }
   });
 }
 
