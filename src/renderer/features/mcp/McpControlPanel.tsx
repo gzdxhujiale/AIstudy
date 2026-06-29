@@ -382,7 +382,7 @@ export function McpControlPanel() {
   const editTools = tools.filter((tool) => tool.mode === "edit");
   const controlTools = tools.filter((tool) => tool.mode === "control");
   const targetCourse = targetCourseId ? courseStore?.courses.find((course) => course.id === targetCourseId) ?? null : null;
-  const remoteAuthText = remoteState?.token ? `Bearer ${remoteState.token}` : "";
+  const remoteAuthText = remoteState?.token ? "Bearer ********" : "";
   const remotePermissions = remoteState?.permissions ?? { edit: false, course: false, mindmap: false, document: false, destructive: false };
   const remoteEditDisabled = remoteBusy || !remoteState?.enabled;
   const remoteGroupDisabled = remoteEditDisabled || !remotePermissions.edit;

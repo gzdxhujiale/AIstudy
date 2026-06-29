@@ -3032,6 +3032,12 @@ h3 {
   background: rgba(248, 250, 252, 0.92);
 }
 
+.textbook-toolbar button.active {
+  border-color: rgba(31, 111, 209, 0.36);
+  color: var(--accent);
+  background: rgba(31, 111, 209, 0.08);
+}
+
 .textbook-toolbar button:disabled {
   color: #b0bac7;
   background: rgba(245, 247, 250, 0.72);
@@ -3075,6 +3081,20 @@ h3 {
 .textbook-zoom-label,
 .textbook-save-state {
   color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.textbook-annotation-text-input {
+  flex: 0 0 150px;
+  height: 30px;
+  min-width: 120px;
+  border: 1px solid rgba(123, 145, 169, 0.16);
+  border-radius: 7px;
+  outline: 0;
+  padding: 0 9px;
+  background: #ffffff;
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 650;
 }
@@ -3152,6 +3172,68 @@ h3 {
 .textbook-pdf-page canvas {
   max-width: 100%;
   max-height: 100%;
+}
+
+.textbook-pdf-annotation-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.textbook-pdf-annotation-layer.editing {
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
+.textbook-pdf-annotation {
+  position: absolute;
+  display: block;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.textbook-pdf-annotation.highlight {
+  background: color-mix(in srgb, var(--annotation-color, #facc15) 38%, transparent);
+}
+
+.textbook-pdf-annotation.text {
+  border-color: color-mix(in srgb, var(--annotation-color, #2563eb) 72%, transparent);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.textbook-pdf-annotation.text span {
+  display: block;
+  height: 100%;
+  padding: 3px 5px;
+  color: var(--annotation-color, #2563eb);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  overflow: hidden;
+}
+
+.textbook-pdf-annotation.selected {
+  border-color: #1f6fd1;
+  box-shadow: 0 0 0 2px rgba(31, 111, 209, 0.18);
+}
+
+.textbook-pdf-annotation-draft {
+  position: absolute;
+  border: 1px solid rgba(31, 111, 209, 0.62);
+  border-radius: 2px;
+  background: rgba(250, 204, 21, 0.24);
+  pointer-events: none;
+}
+
+.textbook-pdf-annotation-draft.text {
+  background: rgba(37, 99, 235, 0.12);
 }
 
 .textbook-pdf-page-state,

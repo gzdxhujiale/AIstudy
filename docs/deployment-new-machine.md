@@ -2,7 +2,7 @@
 
 ## 用户视角流程
 
-1. 已有安装包时，直接运行 `release/AIstudy-Setup-0.1.14.exe`。
+1. 已有安装包时，直接运行 `release/AIstudy-Setup-当前版本.exe`，具体版本以 `package.json` 和 `release` 目录实际产物为准。
 2. 需要在新机器上开发或重新打包时，先运行 `npm run setup:doctor`。
 3. 如果提示依赖缺失，运行 `npm run setup:install`。
 4. 依赖检查通过后，再运行 `npm run dist:oneclick`。
@@ -15,6 +15,7 @@
 - electron-builder 第一次打包时缺少本地缓存。
 - 缓存散落到系统盘，换机器后无法复用。
 - MySQL 没有安装时误以为应用无法打开。
+- 打包源混入 `AIstudyPublicData`、教材本地兜底、Chrome profile 或 MySQL 配置，导致纯净版带出验证机数据。
 
 ## 离线或弱网机器
 
@@ -50,4 +51,5 @@ npm run setup:doctor
 - 新机器先跑 `setup:doctor`，不要直接猜缺什么。
 - 开发依赖安装统一走 `setup:install`。
 - 打包统一走 `dist:oneclick`，不要手工绕过项目本地 cache。
+- `dist:oneclick` 会清理安装源运行数据并写出 `release/build-manifest.json`，用于追溯安装包版本、commit、dirty 状态和产物 hash。
 - MySQL 是增强同步能力，不是打开应用的前置条件。

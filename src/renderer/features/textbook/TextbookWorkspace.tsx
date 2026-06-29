@@ -6,9 +6,13 @@ import {
   ExternalLink,
   FileText,
   FileUp,
+  Highlighter,
   Link2,
   Loader2,
+  RefreshCw,
   Save,
+  Trash2,
+  Type,
   Unlink,
   ZoomIn,
   ZoomOut
@@ -18,13 +22,16 @@ import type { KnowledgeDocumentSnapshot } from "../documents/knowledgeDocumentTy
 import type { MindMapOutlineItem, MindMapSelectedNode } from "../mindmap/mindMapTypes";
 import {
   chooseTextbookPdf,
+  deleteTextbookAnnotation,
+  loadTextbookAnnotations,
   loadTextbookStore,
   normalizeTextbookStore,
   openTextbookPdfWindow,
+  saveTextbookAnnotation,
   saveTextbookStore
 } from "./textbookService";
 import { TextbookNoteEditor, type TextbookNoteEditorHandle } from "./TextbookNoteEditor";
-import type { TextbookAsset, TextbookNote, TextbookStore } from "./textbookTypes";
+import type { TextbookAsset, TextbookNote, TextbookPdfAnnotation, TextbookPdfAnnotationKind, TextbookStore } from "./textbookTypes";
 import {
   createTextbookNoteSnapshotFromText,
   extractTextFromSnapshot,
@@ -45,10 +52,12 @@ type TextbookWorkspaceProps = {
 
 type SaveState = "idle" | "loading" | "saving" | "saved" | "error";
 type DeletedTextbookNoteKey = { textbookId: string; nodeId: string };
+type AnnotationMode = "none" | TextbookPdfAnnotationKind;
 
 const SAVE_DEBOUNCE_MS = 700;
 const DEFAULT_ZOOM = 100;
 const ZOOM_STEP = 10;
+const ANNOTATION_PAGE_WINDOW = 4;
 
 function createId(prefix: string) {
   const randomId = typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -199,6 +208,13 @@ export function TextbookWorkspace({
   const [zoom, setZoom] = React.useState(DEFAULT_ZOOM);
   const [noteSnapshot, setNoteSnapshot] = React.useState<KnowledgeDocumentSnapshot>(() => createEmptyNoteSnapshot());
   const [noteEditorKey, setNoteEditorKey] = React.useState("empty");
+  const [annotations, setAnnotations] = React.useState<TextbookPdfAnnotation[]>([]);
+  const [annotationMode, setAnnotationMode] = React.useState<AnnotationMode>("none");
+  const [annotationText, setAnnotationText] = React.useState("");
+  const [annotationDatabaseAvailable, setAnnotationDatabaseAvailable] = React.useState(false);
+  const [isAnnotationLoading, setIsAnnotationLoading] = React.useState(false);
+  const [isAnnotationSaving, setIsAnnotationSaving] = React.useState(false);
+  const [selectedAnnotationId, setSelectedAnnotationId] = React.useState<string | null>(null);
   const [saveState, setSaveState] = React.useState<SaveState>("idle");
   const [message, setMessage] = React.useState("");
   const [isChoosingPdf, setIsChoosingPdf] = React.useState(false);
@@ -207,6 +223,7 @@ export function TextbookWorkspace({
   const saveTimerRef = React.useRef<number | null>(null);
   const pendingStoreRef = React.useRef<TextbookStore | null>(null);
   const pendingStoreScopeKeyRef = React.useRef("");
+  const annotationWindowRef = React.useRef<{ assetId: string; pageStart: number; pageEnd: number } | null>(null);
   const storeRef = React.useRef(store);
   const activeScopeKeyRef = React.useRef("");
   const bindingNodeIdRef = React.useRef<string | null>(selectedNode.id);
@@ -369,6 +386,13 @@ export function TextbookWorkspace({
       setIsRangeEdited(false);
       setNoteSnapshot(createEmptyNoteSnapshot());
       setNoteEditorKey("empty");
+      setAnnotations([]);
+      annotationWindowRef.current = null;
+      setAnnotationMode("none");
+      setSelectedAnnotationId(null);
+      setAnnotationDatabaseAvailable(false);
+      setIsAnnotationLoading(false);
+      setIsAnnotationSaving(false);
       setSaveState("idle");
       setMessage("");
       bindingNodeIdRef.current = null;
@@ -391,6 +415,13 @@ export function TextbookWorkspace({
     setIsRangeEdited(false);
     setNoteSnapshot(createEmptyNoteSnapshot());
     setNoteEditorKey(`empty:${scopeKey}`);
+    setAnnotations([]);
+    annotationWindowRef.current = null;
+    setAnnotationMode("none");
+    setSelectedAnnotationId(null);
+    setAnnotationDatabaseAvailable(false);
+    setIsAnnotationLoading(false);
+    setIsAnnotationSaving(false);
     loadedBindingNodeIdRef.current = null;
     loadedBindingContextKeyRef.current = "";
     setIsBindingReady(false);
@@ -636,6 +667,168 @@ export function TextbookWorkspace({
     schedulePersist(nextStore);
   }, [activeAsset?.id, activeAsset?.pageCount, getLatestStore, scopeKey, schedulePersist]);
 
+  const reloadAnnotations = React.useCallback(async (silent = false, force = false) => {
+    if (!scope || !activeAsset) {
+      setAnnotations([]);
+      annotationWindowRef.current = null;
+      setAnnotationMode("none");
+      setSelectedAnnotationId(null);
+      setAnnotationDatabaseAvailable(false);
+      return;
+    }
+
+    const requestScopeKey = scopeKey;
+    const requestAssetId = activeAsset.id;
+    const maxPage = activeAsset.pageCount || 100000;
+    const pageStart = Math.max(1, pageNumber - ANNOTATION_PAGE_WINDOW);
+    const pageEnd = Math.min(maxPage, pageNumber + ANNOTATION_PAGE_WINDOW);
+    const loadedWindow = annotationWindowRef.current;
+    if (
+      !force
+      && loadedWindow
+      && loadedWindow.assetId === requestAssetId
+      && loadedWindow.pageStart <= pageStart
+      && loadedWindow.pageEnd >= pageEnd
+    ) {
+      return;
+    }
+
+    if (!silent) setIsAnnotationLoading(true);
+    try {
+      const result = await loadTextbookAnnotations(scope, requestAssetId, { pageStart, pageEnd });
+      if (activeScopeKeyRef.current !== requestScopeKey || activeAssetId !== requestAssetId) return;
+      setAnnotationDatabaseAvailable(result.databaseAvailable);
+      setAnnotations(result.annotations);
+      setSelectedAnnotationId(null);
+      if (!result.databaseAvailable) {
+        annotationWindowRef.current = null;
+        setAnnotationMode("none");
+        if (!silent) {
+          setSaveState("error");
+          setMessage("数据库未连接，PDF 批注已清空。");
+        }
+      } else if (!silent) {
+        annotationWindowRef.current = { assetId: requestAssetId, pageStart, pageEnd };
+        setMessage("");
+      } else {
+        annotationWindowRef.current = { assetId: requestAssetId, pageStart, pageEnd };
+      }
+    } catch (error) {
+      if (activeScopeKeyRef.current !== requestScopeKey || activeAssetId !== requestAssetId) return;
+      setAnnotationDatabaseAvailable(false);
+      setAnnotations([]);
+      annotationWindowRef.current = null;
+      setAnnotationMode("none");
+      setSelectedAnnotationId(null);
+      if (!silent) {
+        setSaveState("error");
+        setMessage(error instanceof Error ? error.message : "PDF 批注暂时无法读取。");
+      }
+    } finally {
+      if (!silent) setIsAnnotationLoading(false);
+    }
+  }, [activeAsset?.id, activeAsset?.pageCount, activeAssetId, pageNumber, scopeKey]);
+
+  React.useEffect(() => {
+    void reloadAnnotations(false);
+  }, [reloadAnnotations]);
+
+  React.useEffect(() => {
+    if (!activeAsset || annotationDatabaseAvailable) return undefined;
+    const timer = window.setInterval(() => {
+      void reloadAnnotations(true);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [activeAsset?.id, annotationDatabaseAvailable, reloadAnnotations]);
+
+  const handleCreateAnnotation = React.useCallback(async (draft: {
+    pageNumber: number;
+    kind: TextbookPdfAnnotationKind;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    text: string;
+  }) => {
+    if (!scope || !activeAsset || !bindingNodeId || !annotationDatabaseAvailable || isAnnotationSaving) {
+      setAnnotationMode("none");
+      setMessage("数据库未连接，PDF 批注没有保存。");
+      setSaveState("error");
+      return;
+    }
+    if (draft.kind === "text" && !draft.text.trim()) {
+      setMessage("请输入文字批注。");
+      setSaveState("error");
+      return;
+    }
+
+    const timestamp = nowIso();
+    const annotation: TextbookPdfAnnotation = {
+      id: createId("pdfann"),
+      textbookId: activeAsset.id,
+      courseId: scope.courseId,
+      mindMapId: scope.mindMapId,
+      nodeId: bindingNodeId,
+      nodeTitle: bindingNodeTitle,
+      pageNumber: clampPage(draft.pageNumber, activeAsset),
+      kind: draft.kind,
+      x: draft.x,
+      y: draft.y,
+      width: draft.width,
+      height: draft.height,
+      color: draft.kind === "text" ? "#2563eb" : "#facc15",
+      text: draft.text,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+
+    setIsAnnotationSaving(true);
+    try {
+      const saved = await saveTextbookAnnotation(scope, annotation);
+      if (!saved || activeScopeKeyRef.current !== scopeKey || activeAssetId !== activeAsset.id) return;
+      setAnnotationDatabaseAvailable(true);
+      setAnnotations((current) => [
+        ...current.filter((item) => item.id !== saved.id),
+        saved
+      ]);
+      setSelectedAnnotationId(saved.id);
+      setSaveState("saved");
+      setMessage("已保存");
+    } catch (error) {
+      setAnnotationDatabaseAvailable(false);
+      setAnnotations([]);
+      annotationWindowRef.current = null;
+      setAnnotationMode("none");
+      setSelectedAnnotationId(null);
+      setSaveState("error");
+      setMessage(error instanceof Error ? error.message : "PDF 批注没有保存。");
+    } finally {
+      setIsAnnotationSaving(false);
+    }
+  }, [activeAsset?.id, activeAssetId, annotationDatabaseAvailable, bindingNodeId, bindingNodeTitle, isAnnotationSaving, scopeKey]);
+
+  async function deleteSelectedAnnotation() {
+    if (!scope || !activeAsset || !selectedAnnotationId || isAnnotationSaving) return;
+    setIsAnnotationSaving(true);
+    try {
+      await deleteTextbookAnnotation(scope, activeAsset.id, selectedAnnotationId);
+      setAnnotations((current) => current.filter((annotation) => annotation.id !== selectedAnnotationId));
+      setSelectedAnnotationId(null);
+      setSaveState("saved");
+      setMessage("已删除");
+    } catch (error) {
+      setAnnotationDatabaseAvailable(false);
+      setAnnotations([]);
+      annotationWindowRef.current = null;
+      setAnnotationMode("none");
+      setSelectedAnnotationId(null);
+      setSaveState("error");
+      setMessage(error instanceof Error ? error.message : "PDF 批注没有删除。");
+    } finally {
+      setIsAnnotationSaving(false);
+    }
+  }
+
   async function choosePdf() {
     if (!scope || isChoosingPdf) return;
     setIsChoosingPdf(true);
@@ -656,6 +849,11 @@ export function TextbookWorkspace({
       setPageStartDraft(Number.NaN);
       setPageEndDraft(Number.NaN);
       setIsRangeEdited(false);
+      setAnnotations([]);
+      annotationWindowRef.current = null;
+      setAnnotationMode("none");
+      setSelectedAnnotationId(null);
+      setAnnotationDatabaseAvailable(false);
       schedulePersist(nextStore, true);
     } catch (error) {
       setSaveState("error");
@@ -731,6 +929,9 @@ export function TextbookWorkspace({
   const canCancelBinding = Boolean(activeAsset && bindingNodeId && hasActiveBinding);
   const canUseBoundNote = Boolean(activeAsset && bindingNodeId && hasActiveBinding);
   const noteEditorDisabled = !activeAsset || !bindingNodeId || !isActiveBindingLoaded;
+  const selectedAnnotation = selectedAnnotationId ? annotations.find((annotation) => annotation.id === selectedAnnotationId) ?? null : null;
+  const canEditAnnotations = Boolean(activeAsset && bindingNodeId && annotationDatabaseAvailable && !isAnnotationLoading && !isAnnotationSaving);
+  const effectiveAnnotationMode: AnnotationMode = canEditAnnotations ? annotationMode : "none";
   const bindingStatusText = !activeAsset || !bindingNodeId
     ? "未选中"
     : !isActiveBindingLoaded
@@ -757,6 +958,11 @@ export function TextbookWorkspace({
               setPageStartDraft(Number.NaN);
               setPageEndDraft(Number.NaN);
               setIsRangeEdited(false);
+              setAnnotations([]);
+              annotationWindowRef.current = null;
+              setAnnotationMode("none");
+              setSelectedAnnotationId(null);
+              setAnnotationDatabaseAvailable(false);
             }}
             disabled={!canUseTextbook || !store.assets.length}
             title="教材"
@@ -810,6 +1016,41 @@ export function TextbookWorkspace({
         <button type="button" title="放大" onClick={() => setZoom((value) => Math.min(180, value + ZOOM_STEP))} disabled={!activeAsset || zoom >= 180}>
           <ZoomIn size={15} />
         </button>
+        <span className="textbook-toolbar-separator" />
+        <button
+          type="button"
+          className={effectiveAnnotationMode === "highlight" ? "active" : undefined}
+          title="高亮"
+          onClick={() => setAnnotationMode((current) => current === "highlight" ? "none" : "highlight")}
+          disabled={!canEditAnnotations}
+        >
+          <Highlighter size={15} />
+        </button>
+        <button
+          type="button"
+          className={effectiveAnnotationMode === "text" ? "active" : undefined}
+          title="文字"
+          onClick={() => setAnnotationMode((current) => current === "text" ? "none" : "text")}
+          disabled={!canEditAnnotations}
+        >
+          <Type size={15} />
+        </button>
+        {effectiveAnnotationMode === "text" ? (
+          <input
+            className="textbook-annotation-text-input"
+            value={annotationText}
+            onChange={(event) => setAnnotationText(event.target.value)}
+            maxLength={160}
+            placeholder="文字"
+            aria-label="文字批注"
+          />
+        ) : null}
+        <button type="button" title="删除批注" onClick={() => void deleteSelectedAnnotation()} disabled={!selectedAnnotation || !canEditAnnotations}>
+          <Trash2 size={15} />
+        </button>
+        <button type="button" title="重载批注" onClick={() => void reloadAnnotations(false, true)} disabled={!activeAsset || isAnnotationLoading}>
+          {isAnnotationLoading ? <Loader2 className="spin-icon" size={15} /> : <RefreshCw size={15} />}
+        </button>
         <span className="mindmap-toolbar-spacer" />
         <span className={saveState === "error" ? "textbook-save-state error" : "textbook-save-state"}>
           {saveState === "loading" ? "打开中" : saveState === "saving" ? "保存中" : saveState === "saved" ? message || "已保存" : message}
@@ -824,8 +1065,14 @@ export function TextbookWorkspace({
                 asset={activeAsset}
                 pageNumber={pageNumber}
                 zoom={zoom}
+                annotations={annotations}
+                annotationMode={effectiveAnnotationMode}
+                annotationText={annotationText}
+                selectedAnnotationId={selectedAnnotationId}
                 onPageChange={handleViewerPageChange}
                 onPageCountChange={handleViewerPageCountChange}
+                onCreateAnnotation={handleCreateAnnotation}
+                onSelectAnnotation={setSelectedAnnotationId}
               />
             </React.Suspense>
           ) : (

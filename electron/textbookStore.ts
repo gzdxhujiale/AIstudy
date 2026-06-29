@@ -8,6 +8,7 @@ export type TextbookMysqlRuntime = {
   pool: Pool;
   textbookAssetTable: string;
   textbookNoteTable: string;
+  textbookAnnotationTable: string;
 };
 
 export type TextbookAsset = {
@@ -46,6 +47,27 @@ export type TextbookStore = {
   notes: TextbookNote[];
 };
 
+export type TextbookPdfAnnotationKind = "highlight" | "text";
+
+export type TextbookPdfAnnotation = {
+  id: string;
+  textbookId: string;
+  courseId: string;
+  mindMapId: string;
+  nodeId: string;
+  nodeTitle: string;
+  pageNumber: number;
+  kind: TextbookPdfAnnotationKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type TextbookAssetRow = RowDataPacket & {
   id: string;
   courseId: string;
@@ -72,6 +94,25 @@ type TextbookNoteRow = RowDataPacket & {
   pageEnd: number | string;
   content: string;
   snapshotJson: string | null;
+  createdAt: Date | string;
+  updatedAt: Date | string;
+};
+
+type TextbookAnnotationRow = RowDataPacket & {
+  id: string;
+  textbookId: string;
+  courseId: string;
+  mindMapId: string;
+  nodeId: string;
+  nodeTitle: string;
+  pageNumber: number | string;
+  kind: string;
+  x: number | string;
+  y: number | string;
+  width: number | string;
+  height: number | string;
+  color: string;
+  text: string;
   createdAt: Date | string;
   updatedAt: Date | string;
 };
@@ -124,6 +165,21 @@ function normalizeInteger(value: unknown, fallback: number, min: number, max: nu
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return fallback;
   return Math.max(min, Math.min(max, Math.round(numberValue)));
+}
+
+function normalizeRatio(value: unknown, fallback: number) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.max(0, Math.min(1, numberValue));
+}
+
+function normalizeAnnotationKind(value: unknown): TextbookPdfAnnotationKind {
+  return value === "text" ? "text" : "highlight";
+}
+
+function normalizeAnnotationColor(value: unknown, fallback: string) {
+  const color = normalizeString(value);
+  return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : fallback;
 }
 
 function createEmptyTextbookStore(): TextbookStore {
@@ -205,6 +261,50 @@ export function normalizeTextbookStore(value: unknown, scope?: { courseId: strin
     : [];
   const uniqueNotes = Array.from(new Map(notes.map((note) => [`${note.textbookId}\u0000${note.nodeId}`, note])).values());
   return { version: TEXTBOOK_STORE_VERSION, assets: uniqueAssets, notes: uniqueNotes };
+}
+
+export function normalizeTextbookAnnotation(
+  value: unknown,
+  scope?: { courseId: string; mindMapId: string; textbookId?: string }
+): TextbookPdfAnnotation | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<TextbookPdfAnnotation>;
+  const id = normalizeString(candidate.id) || createId("pdfann");
+  const textbookId = normalizeString(candidate.textbookId);
+  const courseId = normalizeString(candidate.courseId);
+  const mindMapId = normalizeString(candidate.mindMapId);
+  const nodeId = normalizeString(candidate.nodeId);
+  if (!id || !textbookId || !courseId || !mindMapId || !nodeId) return null;
+  if (scope && (courseId !== scope.courseId || mindMapId !== scope.mindMapId)) return null;
+  if (scope?.textbookId && textbookId !== scope.textbookId) return null;
+
+  const kind = normalizeAnnotationKind(candidate.kind);
+  const pageNumber = normalizeInteger(candidate.pageNumber, 1, 1, 100000);
+  const x = normalizeRatio(candidate.x, 0);
+  const y = normalizeRatio(candidate.y, 0);
+  const width = normalizeRatio(candidate.width, 0);
+  const height = normalizeRatio(candidate.height, 0);
+  if (width <= 0 || height <= 0) return null;
+
+  const createdAt = normalizeString(candidate.createdAt) || nowIso();
+  return {
+    id,
+    textbookId,
+    courseId,
+    mindMapId,
+    nodeId,
+    nodeTitle: normalizeString(candidate.nodeTitle),
+    pageNumber,
+    kind,
+    x,
+    y,
+    width: Math.min(width, 1 - x),
+    height: Math.min(height, 1 - y),
+    color: normalizeAnnotationColor(candidate.color, kind === "text" ? "#2563eb" : "#facc15"),
+    text: normalizeText(candidate.text).slice(0, 2000),
+    createdAt,
+    updatedAt: normalizeString(candidate.updatedAt) || createdAt
+  };
 }
 
 export function textbookStoreHasContent(store: TextbookStore) {
@@ -346,7 +446,7 @@ async function addMysqlIndexIfMissing(pool: Pool, table: string, tableName: stri
   await pool.query(`ALTER TABLE ${table} ADD ${definition}`);
 }
 
-export async function ensureTextbookTables(pool: Pool, assetTable: string, noteTable: string) {
+export async function ensureTextbookTables(pool: Pool, assetTable: string, noteTable: string, annotationTable: string) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ${assetTable} (
       id VARCHAR(64) NOT NULL,
@@ -400,6 +500,32 @@ export async function ensureTextbookTables(pool: Pool, assetTable: string, noteT
     await pool.query(`UPDATE ${noteTable} SET page_start = page_number, page_end = page_number WHERE page_number > 0`);
   }
   await addMysqlIndexIfMissing(pool, noteTable, noteTableName, "idx_textbook_note_range", "KEY idx_textbook_note_range (textbook_id, page_start, page_end)");
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${annotationTable} (
+      id VARCHAR(64) NOT NULL,
+      textbook_id VARCHAR(64) NOT NULL,
+      course_id VARCHAR(64) NOT NULL,
+      mind_map_id VARCHAR(64) NOT NULL,
+      node_id VARCHAR(96) NOT NULL,
+      node_title VARCHAR(255) NOT NULL,
+      page_number INT NOT NULL DEFAULT 1,
+      kind VARCHAR(32) NOT NULL,
+      x DECIMAL(10, 8) NOT NULL,
+      y DECIMAL(10, 8) NOT NULL,
+      width DECIMAL(10, 8) NOT NULL,
+      height DECIMAL(10, 8) NOT NULL,
+      color VARCHAR(16) NOT NULL,
+      text LONGTEXT NOT NULL,
+      created_at DATETIME(3) NOT NULL,
+      updated_at DATETIME(3) NOT NULL,
+      deleted_at DATETIME(3) NULL,
+      PRIMARY KEY (id),
+      KEY idx_textbook_annotation_scope (course_id, mind_map_id, textbook_id, page_number, updated_at),
+      KEY idx_textbook_annotation_node (course_id, mind_map_id, node_id, page_number),
+      KEY idx_textbook_annotation_deleted (deleted_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
 }
 
 export async function readTextbookStoreFromMysql(
@@ -535,4 +661,102 @@ export async function writeTextbookStoreToMysql(
   } finally {
     connection.release();
   }
+}
+
+export async function readTextbookAnnotationsFromMysql(
+  runtime: TextbookMysqlRuntime,
+  scope: { courseId: string; mindMapId: string; textbookId: string; pageStart?: number; pageEnd?: number }
+): Promise<TextbookPdfAnnotation[]> {
+  const pageStart = normalizeInteger(scope.pageStart, 0, 0, 100000);
+  const pageEnd = normalizeInteger(scope.pageEnd, 0, 0, 100000);
+  const hasPageWindow = pageStart > 0 && pageEnd >= pageStart;
+  const params: Array<string | number> = [scope.courseId, scope.mindMapId, scope.textbookId];
+  if (hasPageWindow) {
+    params.push(pageStart, pageEnd);
+  }
+
+  const [rows] = await runtime.pool.execute<TextbookAnnotationRow[]>(
+    `SELECT id, textbook_id AS textbookId, course_id AS courseId, mind_map_id AS mindMapId,
+            node_id AS nodeId, node_title AS nodeTitle, page_number AS pageNumber,
+            kind, x, y, width, height, color, text, created_at AS createdAt, updated_at AS updatedAt
+     FROM ${runtime.textbookAnnotationTable}
+     WHERE course_id = ? AND mind_map_id = ? AND textbook_id = ? AND deleted_at IS NULL
+       ${hasPageWindow ? "AND page_number BETWEEN ? AND ?" : ""}
+     ORDER BY page_number ASC, updated_at ASC`,
+    params
+  );
+
+  return rows.map((row) => normalizeTextbookAnnotation({
+    id: row.id,
+    textbookId: row.textbookId,
+    courseId: row.courseId,
+    mindMapId: row.mindMapId,
+    nodeId: row.nodeId,
+    nodeTitle: row.nodeTitle,
+    pageNumber: row.pageNumber,
+    kind: row.kind,
+    x: row.x,
+    y: row.y,
+    width: row.width,
+    height: row.height,
+    color: row.color,
+    text: row.text,
+    createdAt: toIsoTimestamp(row.createdAt),
+    updatedAt: toIsoTimestamp(row.updatedAt)
+  }, scope)).filter((annotation): annotation is TextbookPdfAnnotation => Boolean(annotation));
+}
+
+export async function writeTextbookAnnotationToMysql(
+  runtime: TextbookMysqlRuntime,
+  value: unknown,
+  scope: { courseId: string; mindMapId: string; textbookId: string }
+): Promise<TextbookPdfAnnotation> {
+  const annotation = normalizeTextbookAnnotation(value, scope);
+  if (!annotation) {
+    throw new Error("PDF annotation is invalid.");
+  }
+
+  await runtime.pool.execute(
+    `INSERT INTO ${runtime.textbookAnnotationTable}
+      (id, textbook_id, course_id, mind_map_id, node_id, node_title, page_number, kind,
+       x, y, width, height, color, text, created_at, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+     ON DUPLICATE KEY UPDATE
+      textbook_id = VALUES(textbook_id), course_id = VALUES(course_id), mind_map_id = VALUES(mind_map_id),
+      node_id = VALUES(node_id), node_title = VALUES(node_title), page_number = VALUES(page_number),
+      kind = VALUES(kind), x = VALUES(x), y = VALUES(y), width = VALUES(width), height = VALUES(height),
+      color = VALUES(color), text = VALUES(text), updated_at = VALUES(updated_at), deleted_at = NULL`,
+    [
+      annotation.id,
+      annotation.textbookId,
+      annotation.courseId,
+      annotation.mindMapId,
+      annotation.nodeId,
+      annotation.nodeTitle,
+      annotation.pageNumber,
+      annotation.kind,
+      annotation.x,
+      annotation.y,
+      annotation.width,
+      annotation.height,
+      annotation.color,
+      annotation.text,
+      toMysqlDate(annotation.createdAt),
+      toMysqlDate(annotation.updatedAt)
+    ]
+  );
+
+  return annotation;
+}
+
+export async function deleteTextbookAnnotationFromMysql(
+  runtime: TextbookMysqlRuntime,
+  scope: { courseId: string; mindMapId: string; textbookId: string; annotationId: string }
+) {
+  await runtime.pool.execute(
+    `UPDATE ${runtime.textbookAnnotationTable}
+     SET deleted_at = ?, updated_at = ?
+     WHERE id = ? AND course_id = ? AND mind_map_id = ? AND textbook_id = ? AND deleted_at IS NULL`,
+    [new Date(), new Date(), scope.annotationId, scope.courseId, scope.mindMapId, scope.textbookId]
+  );
 }

@@ -457,7 +457,7 @@ Word 文档：
 
 MCP 内网访问：
 
-- 设置页开启“内网访问”后，需要展示并可复制三行：
+- 设置页开启“内网访问”后，复制内容必须只包含三行；界面可遮罩 Authorization，但复制结果必须保留完整 token：
 
 ```text
 MCP URL: ...
@@ -476,6 +476,9 @@ npm run setup:install       # 安装/补齐依赖
 npm run dev:app             # 日常开发验证，不打安装包
 npm run dev                 # 原始 Vite + Electron 调试入口
 npm run build               # TypeScript + Vite + Electron 构建
+npm run qa:data-boundaries  # 校验 DB-first、本地缓存、preload 和打包数据边界
+npm run qa:math-clipboard   # 校验 ChatGPT/KaTeX/MathML/纯文本数学粘贴解析
+npm run qa:textbook         # 构建并校验教材资产/笔记/PDF 批注数据合同
 npm run qa:error-codes      # 构建并校验错误码体系
 npm run dist:oneclick       # 关闭旧实例并打包 NSIS 安装包
 npm run shortcuts:refresh   # 刷新桌面、开始菜单或固定栏快捷方式指向
@@ -501,6 +504,7 @@ npm run github:sync:fix     # 按脚本规则修复 GitHub 发布同步问题
 从 win-unpacked 移除本机运行数据目录，并用清理后的 prepackaged win-unpacked 重建最终 NSIS 安装器
 恢复便携运行数据
 刷新并校验桌面、开始菜单快捷方式
+写出 release\build-manifest.json，记录版本、commit、dirty 状态和产物 hash
 ```
 
 Codex 接手文档同步：
@@ -568,7 +572,8 @@ npm run dist:oneclick
 - 没有误动自用版。
 - 开发侧 docs/scripts 没进入打包产物。
 - 用户数据库和运行数据不会被安装包覆盖。
-- 纯净发行版安装包不包含 `AIstudyPublicData/state/courses.json`、`course-pending-operations.json`、教材本地兜底、Chrome profile、MySQL 配置或任何验证机运行数据；`dist:oneclick` 的纯净源守卫必须通过；新装应先通过本机数据库配置/服务建立连接，无法连接时再进入明确的本机空镜像模式。
+- 纯净发行版安装包不包含 `AIstudyPublicData/state/courses.json`、`course-pending-operations.json`、`textbook-pending-scopes.json`、`textbook-database-backed-scopes.json`、教材本地兜底、Chrome profile、MySQL 配置或任何验证机运行数据；`dist:oneclick` 的纯净源守卫必须通过；新装应先通过本机数据库配置/服务建立连接，无法连接时再进入明确的本机空镜像模式。
+- 打包后确认 `release\build-manifest.json` 已写出，并能追溯安装包版本、commit、dirty 状态和 artifact hash。
 - 新功能对应模块 README 或主 README 已补。
 - 功能开发内容已同步或准备同步到 `AIstudy 全量功能架构`。
 - 如果打包发布，确认 `release\AIstudy-Setup-当前版本.exe` 与 `release\win-unpacked\AIstudy.exe` 均已更新。
@@ -584,7 +589,7 @@ npm run dist:oneclick
 
 ## 11. 最近版本记录
 
-- `0.1.76`：接入 AIstudy 管理 MySQL 自动发现和短启动，安装器 MySQL 配置改为 UTF-8 无 BOM 写入，修复重复安装时 `[mysqld]`/`[client]` 多端口解析导致的参数转换失败，并为 `dist:oneclick` 增加纯净安装源运行数据守卫。
+- `0.1.76`：接入 AIstudy 管理 MySQL 自动发现和短启动，安装器 MySQL 配置改为 UTF-8 无 BOM 写入，修复重复安装时 `[mysqld]`/`[client]` 多端口解析导致的参数转换失败，并为 `dist:oneclick` 增加纯净安装源运行数据守卫；后续补充教材 PDF 批注 DB-owned 服务拆分、`storageBoundary` 数据边界清单、数学粘贴共享解析模块、`qa:data-boundaries`、`qa:math-clipboard`、`qa:textbook` 和 `release/build-manifest.json`。
 - `0.1.75`：纯净公开版默认隔离本机数据目录，并在未显式配置 MySQL 时避免读取本机旧数据库内容。
 - `0.1.74`：修复教材节点页段绑定状态隔离、已绑定锁定/取消重设，并清理教材 PDF 独立窗口残留。
 - `0.1.73`：修复教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化问题，并优化文档内 AI 小窗拖动体验。
@@ -697,9 +702,12 @@ electron/main.ts
 
 - `src/renderer/features/textbook/` 原本缺 README，本轮已补齐；后续教材功能变化要同步维护该 README。
 - `scripts/mcp/aistudy-mcp-server.mjs` 的 Chrome 端口平台列表缺少 `xiaohongshu`，而 `electron/main.ts`、`electron/mcp/controller.ts` 和 MCP 文档已经包含小红书 `9235`；后续改 MCP 端口能力时要先同步这里。
-- `docs/deployment-new-machine.md` 示例安装包版本仍是旧的 `0.1.14`，具体版本必须以 `package.json`、`docs/updates/INDEX.md` 和 `release/AIstudy-Setup-*.exe` 为准。
-- `docs/ARCHITECTURE.md` 的 “Current Implemented Surfaces” 标题仍停在 `0.1.68`，而当前包版本和更新索引已更新为 `0.1.75`；新线程判断版本时以 `package.json`、`docs/updates/INDEX.md`、`release/AIstudy-Setup-*.exe` 和本交接文档为准。
-- `electron/main.ts` 仍承载大量业务服务逻辑。继续扩展考试、教材、采集或 MCP 时，优先抽到独立 main-side service 文件，再通过 preload 暴露，不要继续扩大主进程巨文件。
+- `docs/deployment-new-machine.md` 已改为当前版本通用安装包示例；具体版本仍必须以 `package.json`、`docs/updates/INDEX.md` 和 `release/AIstudy-Setup-*.exe` 为准。
+- `docs/ARCHITECTURE.md` 的 “Current Implemented Surfaces” 已同步到 `0.1.76`，并补充教材、DB-first 边界、QA 和打包 manifest 规则。
+- `electron/main.ts` 仍承载大量业务服务逻辑，但教材 PDF 批注已经抽到 `electron/textbookAnnotationService.ts`。继续扩展考试、教材、采集或 MCP 时，优先抽到独立 main-side service 文件，再通过 preload 暴露，不要继续扩大主进程巨文件。
+- DB-first 数据边界已新增 `electron/storageBoundary.ts`，`npm run build` 会先跑 `qa:data-boundaries`；后续新增本地缓存、preload 能力或打包运行数据时要同步更新该清单和 QA 守卫。
+- ChatGPT/KaTeX/MathML/纯文本数学粘贴已抽到 `src/renderer/features/mathInput/`，`npm run build` 会先跑 `qa:math-clipboard`；后续改教材或节点文档粘贴逻辑时不要在业务组件内另起一套符号替换。
+- 教材资产、节点笔记和 PDF 批注新增 `npm run qa:textbook` 回归脚本；涉及教材页段绑定、笔记规范化、批注坐标/颜色/数据库归属时必须运行。
 - 本轮检索了 `TODO/FIXME/placeholder/mock/sample/lorem/测试/占位/假/dummy/fake`。新增可疑业务假入口未发现；命中主要是历史研究文档里的 fixture/sample 计划、CSS/输入框 placeholder、导入报告 `sample` 字段，以及考试政治真题种子入口。后续如果改 UI，应继续遵守“不展示未接入真实能力的入口”。
 - 当前工作区已有用户/历史改动，交接者在任何提交、打包或发布前必须重新跑 `git status --short --branch` 并确认改动归属。
 

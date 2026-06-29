@@ -26,6 +26,7 @@
 - 当前资产记录保存 PDF 文件路径；跨机器迁移前必须重新确认路径相对化和资产复制策略。
 - 笔记快照沿用 `aistudy-word`/canvas-editor 结构，载入 Word 文档时走现有 `aistudyKnowledgeDocuments` API。
 - 教材笔记支持 canvas-editor 原生上下标元素和常用数学字符模板，`D_f`、`R_f`、`x^2` 等应保存为富文本快照结构，不退化成普通字符串。
+- 从 ChatGPT/KaTeX/MathML/HTML/纯文本粘贴到教材笔记的数学内容走 `features/mathInput` 共享清洗，`f:Xarrow Y`、`R_f ⊂ Y`、`X=ℝ`、`[0,+∞)` 等应在粘贴和重开后保持稳定。
 
 ## 文件
 
@@ -46,8 +47,19 @@ Renderer 只通过 preload 调用：
 - `aistudyTextbooks.choosePdf`
 - `aistudyTextbooks.readPdf`
 - `aistudyTextbooks.openPdfWindow`
+- `aistudyTextbooks.loadAnnotations`
+- `aistudyTextbooks.saveAnnotation`
+- `aistudyTextbooks.deleteAnnotation`
 
 对应主进程实现集中在 `electron/main.ts` 和 `electron/textbookStore.ts`。
+
+## PDF 批注数据规则
+
+- PDF 批注是 MySQL-only 数据，表为 `textbook_annotations`，不写入本地 JSON 兜底。
+- 数据库不可用时，renderer 必须清空当前批注列表并禁用批注编辑；重新连接后再从 MySQL 自动载入。
+- 批注绑定链路是 `courseId + mindMapId + textbookId + nodeId + pageNumber`，坐标使用页面比例值，避免缩放后漂移。
+- 查看器按当前页前后页窗读取批注，不一次加载整本教材的全部批注；页面 DOM 也只挂载当前页附近的批注层，避免大量批注造成卡顿。
+- PDF 原文件保持只读；高亮、文字等操作保存为批注记录，后续如需导出带批注 PDF，应生成副本，不直接覆盖原教材。
 
 ## 扩展规则
 

@@ -9,6 +9,7 @@ Current files:
 - `KnowledgeDocumentWorkspace.tsx`: selected-node document loading, saving, toolbar, page navigation, importer entry, DOCX export, and inline AI panel.
 - `canvasEditorAdapter.ts`: the only place that creates and controls the canvas editor instance.
 - `knowledgeDocumentTypes.ts`: document snapshot, status, save input, command, and format-state types.
+- `../mathInput/mathClipboard.ts`: shared ChatGPT/KaTeX/MathML/plain-text math paste normalization used before inserting into canvas-editor.
 
 ## Boundaries
 
@@ -35,3 +36,4 @@ Current files:
 - Importers must produce a document snapshot and commit through the existing save path.
 - Exporters must read from the active document snapshot and keep generated files outside MySQL.
 - New asset handling must write to asset storage/link tables instead of embedding binaries.
+- Math paste behavior must stay shared with textbook notes through `features/mathInput`; do not add document-only symbol replacements in this adapter.

@@ -197,7 +197,10 @@ function Assert-CleanInstallerSource {
   $forbiddenFileNames = @(
     "courses.json",
     "course-pending-operations.json",
+    "textbook-pending-scopes.json",
+    "textbook-database-backed-scopes.json",
     "chrome-ports.json",
+    "bilibili-cookies.txt",
     "mysql.config.json"
   )
 
@@ -304,6 +307,13 @@ Write-Host "[AIstudy] Refreshing desktop and start-menu shortcuts..."
 & $shortcutRefreshScript -RuntimeExe $runtimeExe
 if ($LASTEXITCODE -ne 0) {
   Write-Host "[AIstudy] Shortcut refresh failed with exit code $LASTEXITCODE."
+  exit $LASTEXITCODE
+}
+
+Write-Host "[AIstudy] Writing build manifest..."
+& node (Join-Path $projectRoot "scripts\package\write-build-manifest.mjs")
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "[AIstudy] Build manifest failed with exit code $LASTEXITCODE."
   exit $LASTEXITCODE
 }
 

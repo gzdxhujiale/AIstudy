@@ -82,7 +82,10 @@ contextBridge.exposeInMainWorld("aistudyTextbooks", {
   save: (request: unknown) => invokeApp("textbooks:save", request),
   choosePdf: (scope: unknown) => invokeApp("textbooks:choose-pdf", scope),
   readPdf: (request: unknown) => invokeApp("textbooks:read-pdf", request),
-  openPdfWindow: (request: unknown) => invokeApp("textbooks:open-pdf-window", request)
+  openPdfWindow: (request: unknown) => invokeApp("textbooks:open-pdf-window", request),
+  loadAnnotations: (request: unknown) => invokeApp("textbooks:annotations-load", request),
+  saveAnnotation: (request: unknown) => invokeApp("textbooks:annotations-save", request),
+  deleteAnnotation: (request: unknown) => invokeApp("textbooks:annotations-delete", request)
 });
 
 contextBridge.exposeInMainWorld("aistudyMcp", {

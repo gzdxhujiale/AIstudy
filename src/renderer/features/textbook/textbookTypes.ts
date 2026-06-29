@@ -40,3 +40,29 @@ export type TextbookScope = {
   courseId: string;
   mindMapId: string;
 };
+
+export type TextbookPdfAnnotationKind = "highlight" | "text";
+
+export type TextbookPdfAnnotation = {
+  id: string;
+  textbookId: string;
+  courseId: string;
+  mindMapId: string;
+  nodeId: string;
+  nodeTitle: string;
+  pageNumber: number;
+  kind: TextbookPdfAnnotationKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  text: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type TextbookPdfAnnotationLoadResult = {
+  databaseAvailable: boolean;
+  annotations: TextbookPdfAnnotation[];
+};

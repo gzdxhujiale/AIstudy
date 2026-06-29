@@ -3,7 +3,7 @@ import "./pdfjsCompat";
 import * as pdfjs from "pdfjs-dist";
 import pdfWorkerUrl from "./pdfjsWorker.ts?worker&url";
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from "pdfjs-dist";
-import type { TextbookAsset } from "./textbookTypes";
+import type { TextbookAsset, TextbookPdfAnnotation, TextbookPdfAnnotationKind } from "./textbookTypes";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -24,8 +24,22 @@ type PdfDocumentViewerProps = {
   asset: TextbookAsset;
   pageNumber: number;
   zoom: number;
+  annotations?: TextbookPdfAnnotation[];
+  annotationMode?: "none" | TextbookPdfAnnotationKind;
+  annotationText?: string;
+  selectedAnnotationId?: string | null;
   onPageChange: (pageNumber: number) => void;
   onPageCountChange: (pageCount: number) => void;
+  onCreateAnnotation?: (draft: {
+    pageNumber: number;
+    kind: TextbookPdfAnnotationKind;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    text: string;
+  }) => void;
+  onSelectAnnotation?: (annotationId: string | null) => void;
 };
 
 type PdfPageCanvasProps = {
@@ -37,12 +51,42 @@ type PdfPageCanvasProps = {
   onMeasure: (pageNumber: number, width: number, height: number) => void;
 };
 
+type PdfAnnotationLayerProps = {
+  pageNumber: number;
+  pageWidth: number;
+  pageHeight: number;
+  annotations: TextbookPdfAnnotation[];
+  mode: "none" | TextbookPdfAnnotationKind;
+  annotationText: string;
+  selectedAnnotationId: string | null;
+  onCreateAnnotation?: PdfDocumentViewerProps["onCreateAnnotation"];
+  onSelectAnnotation?: (annotationId: string | null) => void;
+};
+
 function clampPage(value: number, pageCount: number) {
   return Math.max(1, Math.min(pageCount || 1, Math.round(Number.isFinite(value) ? value : 1)));
 }
 
 function createPdfSourceUrl(asset: TextbookAsset) {
   return `aistudy-pdf://asset/${encodeURIComponent(asset.id)}.pdf`;
+}
+
+function clampRatio(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeDraftRect(start: { x: number; y: number }, end: { x: number; y: number }, width: number, height: number) {
+  const left = clampRatio(Math.min(start.x, end.x) / width);
+  const top = clampRatio(Math.min(start.y, end.y) / height);
+  const right = clampRatio(Math.max(start.x, end.x) / width);
+  const bottom = clampRatio(Math.max(start.y, end.y) / height);
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top)
+  };
 }
 
 function trimPageCache(cache: Map<number, { page: PDFPageProxy; touchedAt: number }>) {
@@ -115,7 +159,125 @@ function PdfPageCanvas({ pageNumber, width, height, shouldRender, getPage, onMea
   );
 }
 
-export function PdfDocumentViewer({ asset, pageNumber, zoom, onPageChange, onPageCountChange }: PdfDocumentViewerProps) {
+function PdfAnnotationLayer({
+  pageNumber,
+  pageWidth,
+  pageHeight,
+  annotations,
+  mode,
+  annotationText,
+  selectedAnnotationId,
+  onCreateAnnotation,
+  onSelectAnnotation
+}: PdfAnnotationLayerProps) {
+  const layerRef = React.useRef<HTMLDivElement | null>(null);
+  const [draftRect, setDraftRect] = React.useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const dragStartRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  const getPointerPoint = React.useCallback((event: React.PointerEvent) => {
+    const rect = layerRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: Math.max(0, Math.min(rect.width, event.clientX - rect.left)),
+      y: Math.max(0, Math.min(rect.height, event.clientY - rect.top))
+    };
+  }, []);
+
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (mode === "none" || !onCreateAnnotation || pageWidth <= 0 || pageHeight <= 0) return;
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = getPointerPoint(event);
+    dragStartRef.current = point;
+    setDraftRect({ x: point.x / pageWidth, y: point.y / pageHeight, width: 0, height: 0 });
+    onSelectAnnotation?.(null);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    if (!dragStartRef.current || mode === "none") return;
+    const point = getPointerPoint(event);
+    setDraftRect(normalizeDraftRect(dragStartRef.current, point, pageWidth, pageHeight));
+  }
+
+  function finishDraft(event: React.PointerEvent<HTMLDivElement>) {
+    if (!dragStartRef.current || mode === "none") return;
+    const point = getPointerPoint(event);
+    const rect = normalizeDraftRect(dragStartRef.current, point, pageWidth, pageHeight);
+    dragStartRef.current = null;
+    setDraftRect(null);
+    if (rect.width < 0.008 || rect.height < 0.008) return;
+    onCreateAnnotation?.({
+      pageNumber,
+      kind: mode,
+      ...rect,
+      text: mode === "text" ? annotationText.trim() : ""
+    });
+  }
+
+  return (
+    <div
+      ref={layerRef}
+      className={mode === "none" ? "textbook-pdf-annotation-layer" : "textbook-pdf-annotation-layer editing"}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={finishDraft}
+      onPointerCancel={() => {
+        dragStartRef.current = null;
+        setDraftRect(null);
+      }}
+    >
+      {annotations.map((annotation) => (
+        <button
+          key={annotation.id}
+          type="button"
+          className={annotation.id === selectedAnnotationId ? `textbook-pdf-annotation ${annotation.kind} selected` : `textbook-pdf-annotation ${annotation.kind}`}
+          style={{
+            left: `${annotation.x * 100}%`,
+            top: `${annotation.y * 100}%`,
+            width: `${annotation.width * 100}%`,
+            height: `${annotation.height * 100}%`,
+            ["--annotation-color" as string]: annotation.color
+          }}
+          title={annotation.nodeTitle || annotation.text || "PDF annotation"}
+          aria-label={annotation.kind === "text" ? "PDF text annotation" : "PDF highlight annotation"}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelectAnnotation?.(annotation.id);
+          }}
+        >
+          {annotation.kind === "text" ? <span>{annotation.text}</span> : null}
+        </button>
+      ))}
+      {draftRect ? (
+        <span
+          className={mode === "text" ? "textbook-pdf-annotation-draft text" : "textbook-pdf-annotation-draft"}
+          style={{
+            left: `${draftRect.x * 100}%`,
+            top: `${draftRect.y * 100}%`,
+            width: `${draftRect.width * 100}%`,
+            height: `${draftRect.height * 100}%`
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+export function PdfDocumentViewer({
+  asset,
+  pageNumber,
+  zoom,
+  annotations = [],
+  annotationMode = "none",
+  annotationText = "",
+  selectedAnnotationId = null,
+  onPageChange,
+  onPageCountChange,
+  onCreateAnnotation,
+  onSelectAnnotation
+}: PdfDocumentViewerProps) {
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const pageRefs = React.useRef(new Map<number, HTMLDivElement>());
   const visiblePagesRef = React.useRef(new Map<number, { ratio: number; top: number }>());
@@ -314,6 +476,15 @@ export function PdfDocumentViewer({ asset, pageNumber, zoom, onPageChange, onPag
   }, [pdf, pageNumber, effectivePageCount]);
 
   const pages = React.useMemo(() => Array.from({ length: effectivePageCount }, (_, index) => index + 1), [effectivePageCount]);
+  const annotationsByPage = React.useMemo(() => {
+    const map = new Map<number, TextbookPdfAnnotation[]>();
+    for (const annotation of annotations) {
+      const list = map.get(annotation.pageNumber) ?? [];
+      list.push(annotation);
+      map.set(annotation.pageNumber, list);
+    }
+    return map;
+  }, [annotations]);
 
   if (loadState === "error") {
     return <div className="textbook-pdf-status">PDF 没有打开</div>;
@@ -329,6 +500,7 @@ export function PdfDocumentViewer({ asset, pageNumber, zoom, onPageChange, onPag
             ? Math.max(220, Math.floor(displayWidth * (pageSize.height / pageSize.width)))
             : displayHeight;
           const shouldRender = Boolean(pdf && Math.abs(page - currentPage) <= renderWindow);
+          const shouldMountAnnotations = Math.abs(page - currentPage) <= renderWindow;
           return (
             <div
               key={page}
@@ -348,6 +520,19 @@ export function PdfDocumentViewer({ asset, pageNumber, zoom, onPageChange, onPag
                   shouldRender={shouldRender}
                   getPage={getCachedPage}
                   onMeasure={handleMeasure}
+                />
+              ) : null}
+              {shouldMountAnnotations ? (
+                <PdfAnnotationLayer
+                  pageNumber={page}
+                  pageWidth={displayWidth}
+                  pageHeight={pageHeight}
+                  annotations={annotationsByPage.get(page) ?? []}
+                  mode={annotationMode}
+                  annotationText={annotationText}
+                  selectedAnnotationId={selectedAnnotationId}
+                  onCreateAnnotation={onCreateAnnotation}
+                  onSelectAnnotation={onSelectAnnotation}
                 />
               ) : null}
             </div>

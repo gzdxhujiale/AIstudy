@@ -14,6 +14,7 @@ import { AISTUDY_CORE_CONTRACT } from "./coreContract.js";
 import { classifyAppError, createAppError, getAppErrorDefinition } from "./appErrors.js";
 import { exportKnowledgeDocumentDocx } from "./documentExport.js";
 import { ensureExamTables, readExamStoreFromMysql, writeExamStoreToMysql, type ExamMysqlRuntime } from "./examStore.js";
+import { summarizeStorageBoundaries } from "./storageBoundary.js";
 import { readDbFirstStore, writeDbFirstStore, type DbFirstStorageProvider } from "./storageProvider.js";
 import {
   createTextbookAssetFromFile,
@@ -28,6 +29,7 @@ import {
   type TextbookMysqlRuntime,
   type TextbookStore
 } from "./textbookStore.js";
+import { createTextbookAnnotationService } from "./textbookAnnotationService.js";
 import { createMcpController } from "./mcp/controller.js";
 import { createMcpRemoteAccessController } from "./mcp/remoteAccess.js";
 
@@ -324,6 +326,7 @@ type MysqlConfig = {
   examAttemptTable: string;
   textbookAssetTable: string;
   textbookNoteTable: string;
+  textbookAnnotationTable: string;
 };
 
 type CourseRow = RowDataPacket & {
@@ -359,6 +362,7 @@ type MysqlRuntime = ExamMysqlRuntime & TextbookMysqlRuntime & {
   errorLogTable: string;
   textbookAssetTable: string;
   textbookNoteTable: string;
+  textbookAnnotationTable: string;
 };
 
 const PUBLIC_MYSQL_DATABASE = "aistudy_public";
@@ -380,7 +384,8 @@ const PUBLIC_MYSQL_TABLES = {
   examPaperQuestions: "exam_paper_questions",
   examAttempts: "exam_attempts",
   textbookAssets: "textbook_assets",
-  textbookNotes: "textbook_notes"
+  textbookNotes: "textbook_notes",
+  textbookAnnotations: "textbook_annotations"
 } as const;
 
 type AppErrorLogRow = RowDataPacket & {
@@ -4136,7 +4141,8 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
     examPaperQuestionTable: PUBLIC_MYSQL_TABLES.examPaperQuestions,
     examAttemptTable: PUBLIC_MYSQL_TABLES.examAttempts,
     textbookAssetTable: PUBLIC_MYSQL_TABLES.textbookAssets,
-    textbookNoteTable: PUBLIC_MYSQL_TABLES.textbookNotes
+    textbookNoteTable: PUBLIC_MYSQL_TABLES.textbookNotes,
+    textbookAnnotationTable: PUBLIC_MYSQL_TABLES.textbookAnnotations
   };
 
   validateMysqlIdentifier(config.database, "MySQL database");
@@ -4158,6 +4164,7 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
   validateMysqlIdentifier(config.examAttemptTable, "MySQL exam attempt table");
   validateMysqlIdentifier(config.textbookAssetTable, "MySQL textbook asset table");
   validateMysqlIdentifier(config.textbookNoteTable, "MySQL textbook note table");
+  validateMysqlIdentifier(config.textbookAnnotationTable, "MySQL textbook annotation table");
   return config;
 }
 
@@ -4718,6 +4725,7 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
   const examAttemptTable = escapeMysqlIdentifier(config.examAttemptTable, "MySQL exam attempt table");
   const textbookAssetTable = escapeMysqlIdentifier(config.textbookAssetTable, "MySQL textbook asset table");
   const textbookNoteTable = escapeMysqlIdentifier(config.textbookNoteTable, "MySQL textbook note table");
+  const textbookAnnotationTable = escapeMysqlIdentifier(config.textbookAnnotationTable, "MySQL textbook annotation table");
   await ensureCourseTable(pool, courseTable);
   await migrateCourseTable(pool, courseTable);
   await ensureCourseSectionTable(pool, courseSectionTable);
@@ -4728,7 +4736,7 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
   await ensureChromePortStateTable(pool, chromePortStateTable);
   await ensureErrorLogTable(pool, errorLogTable);
   await ensureExamTables(pool, examQuestionTable, examPaperTable, examPaperSectionTable, examPaperQuestionTable, examAttemptTable);
-  await ensureTextbookTables(pool, textbookAssetTable, textbookNoteTable);
+  await ensureTextbookTables(pool, textbookAssetTable, textbookNoteTable, textbookAnnotationTable);
 
   mysqlRuntime = {
     pool,
@@ -4749,7 +4757,8 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
     examPaperQuestionTable,
     examAttemptTable,
     textbookAssetTable,
-    textbookNoteTable
+    textbookNoteTable,
+    textbookAnnotationTable
   };
   return mysqlRuntime;
 }
@@ -5063,6 +5072,27 @@ async function checkLocalRecoveryFiles(): Promise<RuntimeDiagnosticItem> {
   }
 }
 
+function checkStorageBoundaryRuntime(): RuntimeDiagnosticItem {
+  const summary = summarizeStorageBoundaries();
+  if (!summary.valid) {
+    return createDiagnosticItem(
+      "storage-boundaries",
+      "知识库数据边界",
+      "warning",
+      "部分知识库模块缺少数据库归属声明。",
+      "先补齐模块数据边界，再继续做存储改动。"
+    );
+  }
+  return createDiagnosticItem(
+    "storage-boundaries",
+    "知识库数据边界",
+    "ok",
+    `${summary.dbFirst + summary.dbOwned} 个数据库模块和 ${summary.localPreference} 个本机偏好模块已声明边界。`,
+    "无需处理。",
+    false
+  );
+}
+
 async function checkMysqlRuntime(): Promise<RuntimeDiagnosticItem> {
   try {
     const runtime = await getMysqlRuntime();
@@ -5185,6 +5215,7 @@ async function diagnoseRuntime(): Promise<RuntimeDiagnosticResult> {
   const items = [
     dataRootItem,
     await checkLocalRecoveryFiles(),
+    checkStorageBoundaryRuntime(),
     await checkMysqlRuntime(),
     await checkErrorLogRuntime(),
     await checkChromeRuntime(),
@@ -8821,6 +8852,11 @@ function createMainWindow() {
 
 let isTextbookProtocolHandlerRegistered = false;
 const textbookPdfWindows = new Map<string, BrowserWindow>();
+const textbookAnnotationService = createTextbookAnnotationService({
+  getMysqlRuntime,
+  normalizeTextbookScope,
+  normalizeId
+});
 
 function closeTextbookPdfWindows() {
   for (const window of textbookPdfWindows.values()) {
@@ -9531,6 +9567,18 @@ ipcMain.handle("textbooks:read-pdf", withUserFacingError("textbooks:read-pdf", "
 
 ipcMain.handle("textbooks:open-pdf-window", withUserFacingError("textbooks:open-pdf-window", "PDF 窗口没有打开。", (_event, request) => (
   openTextbookPdfWindow(request)
+)));
+
+ipcMain.handle("textbooks:annotations-load", withUserFacingError("textbooks:annotations-load", "PDF 批注暂时无法读取。", (_event, request) => (
+  textbookAnnotationService.load(request)
+)));
+
+ipcMain.handle("textbooks:annotations-save", withUserFacingError("textbooks:annotations-save", "PDF 批注没有保存。", (_event, request) => (
+  textbookAnnotationService.save(request)
+)));
+
+ipcMain.handle("textbooks:annotations-delete", withUserFacingError("textbooks:annotations-delete", "PDF 批注没有删除。", (_event, request) => (
+  textbookAnnotationService.remove(request)
 )));
 
 ipcMain.handle("mcp:state", withUserFacingError("mcp:state", "MCP 状态暂时无法读取。", () => mcpController.getState()));

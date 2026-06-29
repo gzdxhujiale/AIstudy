@@ -1,4 +1,10 @@
-import type { TextbookAsset, TextbookScope, TextbookStore } from "./textbookTypes";
+import type {
+  TextbookAsset,
+  TextbookPdfAnnotation,
+  TextbookPdfAnnotationLoadResult,
+  TextbookScope,
+  TextbookStore
+} from "./textbookTypes";
 import { normalizeTextbookNoteSnapshot } from "./textbookNoteDocument";
 
 declare global {
@@ -9,6 +15,9 @@ declare global {
       choosePdf: (scope: TextbookScope) => Promise<unknown>;
       readPdf: (request: TextbookScope & { assetId: string }) => Promise<ArrayBuffer | Uint8Array>;
       openPdfWindow: (request: TextbookScope & { assetId: string; pageNumber: number; zoom: number }) => Promise<unknown>;
+      loadAnnotations: (request: TextbookScope & { textbookId: string; pageStart?: number; pageEnd?: number }) => Promise<unknown>;
+      saveAnnotation: (request: TextbookScope & { textbookId: string; annotation: TextbookPdfAnnotation }) => Promise<unknown>;
+      deleteAnnotation: (request: TextbookScope & { textbookId: string; annotationId: string }) => Promise<unknown>;
     };
   }
 }
@@ -31,6 +40,63 @@ function normalizeNumber(value: unknown, fallback: number, min: number, max: num
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue)) return fallback;
   return Math.max(min, Math.min(max, Math.round(numberValue)));
+}
+
+function normalizeRatio(value: unknown, fallback: number) {
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue)) return fallback;
+  return Math.max(0, Math.min(1, numberValue));
+}
+
+function normalizeAnnotation(value: unknown, scope: TextbookScope & { textbookId: string }): TextbookPdfAnnotation | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<TextbookPdfAnnotation>;
+  const id = normalizeString(candidate.id);
+  const textbookId = normalizeString(candidate.textbookId);
+  const courseId = normalizeString(candidate.courseId) || scope.courseId;
+  const mindMapId = normalizeString(candidate.mindMapId) || scope.mindMapId;
+  const nodeId = normalizeString(candidate.nodeId);
+  if (!id || textbookId !== scope.textbookId || courseId !== scope.courseId || mindMapId !== scope.mindMapId || !nodeId) return null;
+  const kind = candidate.kind === "text" ? "text" : "highlight";
+  const x = normalizeRatio(candidate.x, 0);
+  const y = normalizeRatio(candidate.y, 0);
+  const width = normalizeRatio(candidate.width, 0);
+  const height = normalizeRatio(candidate.height, 0);
+  if (width <= 0 || height <= 0) return null;
+  const createdAt = normalizeString(candidate.createdAt) || new Date().toISOString();
+  return {
+    id,
+    textbookId,
+    courseId,
+    mindMapId,
+    nodeId,
+    nodeTitle: normalizeString(candidate.nodeTitle),
+    pageNumber: normalizeNumber(candidate.pageNumber, 1, 1, 100000),
+    kind,
+    x,
+    y,
+    width: Math.min(width, 1 - x),
+    height: Math.min(height, 1 - y),
+    color: /^#[0-9a-f]{6}$/i.test(normalizeString(candidate.color))
+      ? normalizeString(candidate.color).toLowerCase()
+      : kind === "text" ? "#2563eb" : "#facc15",
+    text: normalizeText(candidate.text).slice(0, 2000),
+    createdAt,
+    updatedAt: normalizeString(candidate.updatedAt) || createdAt
+  };
+}
+
+function normalizeAnnotationLoadResult(value: unknown, scope: TextbookScope & { textbookId: string }): TextbookPdfAnnotationLoadResult {
+  const candidate = value && typeof value === "object"
+    ? value as { databaseAvailable?: unknown; annotations?: unknown }
+    : {};
+  const annotations = Array.isArray(candidate.annotations)
+    ? candidate.annotations.map((item) => normalizeAnnotation(item, scope)).filter((item): item is TextbookPdfAnnotation => Boolean(item))
+    : [];
+  return {
+    databaseAvailable: candidate.databaseAvailable === true,
+    annotations
+  };
 }
 
 function normalizeAsset(value: unknown, scope: TextbookScope): TextbookAsset | null {
@@ -151,4 +217,27 @@ export async function openTextbookPdfWindow(asset: TextbookAsset, pageNumber: nu
     pageNumber,
     zoom
   });
+}
+
+export async function loadTextbookAnnotations(
+  scope: TextbookScope,
+  textbookId: string,
+  pageWindow: { pageStart?: number; pageEnd?: number } = {}
+) {
+  return normalizeAnnotationLoadResult(
+    await requireTextbookApi().loadAnnotations({ ...scope, textbookId, ...pageWindow }),
+    { ...scope, textbookId }
+  );
+}
+
+export async function saveTextbookAnnotation(scope: TextbookScope, annotation: TextbookPdfAnnotation) {
+  const result = await requireTextbookApi().saveAnnotation({ ...scope, textbookId: annotation.textbookId, annotation });
+  const candidate = result && typeof result === "object" && "annotation" in result
+    ? (result as { annotation?: unknown }).annotation
+    : result;
+  return normalizeAnnotation(candidate, { ...scope, textbookId: annotation.textbookId });
+}
+
+export async function deleteTextbookAnnotation(scope: TextbookScope, textbookId: string, annotationId: string) {
+  await requireTextbookApi().deleteAnnotation({ ...scope, textbookId, annotationId });
 }
