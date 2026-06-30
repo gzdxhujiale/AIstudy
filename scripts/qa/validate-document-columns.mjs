@@ -55,6 +55,16 @@ async function readDocumentXml(snapshot) {
   return documentXml;
 }
 
+function getFirstTableXml(documentXml) {
+  const tableXml = documentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/)?.[0];
+  assert(tableXml, "DOCX should contain a table");
+  return tableXml;
+}
+
+function getTableCellXml(tableXml) {
+  return tableXml.match(/<w:tc>[\s\S]*?<\/w:tc>/g) ?? [];
+}
+
 const columnXml = await readDocumentXml(createSnapshot([
   { value: "分栏前\n" },
   {
@@ -69,10 +79,10 @@ const columnXml = await readDocumentXml(createSnapshot([
       {
         height: 42,
         tdList: [
-          { colspan: 1, rowspan: 1, value: [{ value: "左栏内容" }] },
+          { colspan: 1, rowspan: 1, value: [{ value: "aluminium\nhug\nbearing" }] },
           { colspan: 1, rowspan: 1, value: [], disabled: true, deletable: false },
           { colspan: 1, rowspan: 1, value: [], disabled: true, deletable: false, borderTypes: ["left"] },
-          { colspan: 1, rowspan: 1, value: [{ value: "右栏内容" }] }
+          { colspan: 1, rowspan: 1, value: [{ value: "responsibility\nbelow\nbasket" }] }
         ]
       }
     ]
@@ -80,10 +90,13 @@ const columnXml = await readDocumentXml(createSnapshot([
   { value: "\n分栏后" }
 ]));
 
-assert(columnXml.includes("左栏内容") && columnXml.includes("右栏内容"), "column block text should be exported");
+assert(columnXml.includes("aluminium") && columnXml.includes("responsibility"), "column block text should be exported");
 assert(columnXml.includes("<w:insideV w:val=\"single\""), "column block should export an internal vertical divider");
 assert((columnXml.match(/w:val="none"/g) ?? []).length >= 5, "column block outer borders should export as none");
-assert((columnXml.match(/<w:tc\b/g) ?? []).length === 2, "column block spacer cells should not be exported as DOCX columns");
+const columnCells = getTableCellXml(getFirstTableXml(columnXml));
+assert(columnCells.length === 2, "column block spacer cells should not be exported as DOCX columns");
+assert((columnCells[0].match(/<w:p(?:\s|>)/g) ?? []).length >= 3, "left column should export one vertical paragraph per pasted line");
+assert((columnCells[1].match(/<w:p(?:\s|>)/g) ?? []).length >= 3, "right column should export one vertical paragraph per pasted line");
 assert(!columnXml.includes('w:fill="F8FAFC"'), "column block export should not apply normal table first-column shading");
 
 const normalizedColumnSnapshot = normalizeDocumentSnapshot(createSnapshot([

@@ -357,6 +357,14 @@ function getCellText(cell: unknown) {
   return readElementText(cell.value ?? cell.valueList ?? cell.children ?? cell);
 }
 
+function getCellElements(cell: unknown) {
+  if (!isRecord(cell)) return [];
+  if (Array.isArray(cell.value)) return cell.value;
+  if (Array.isArray(cell.valueList)) return cell.valueList;
+  if (Array.isArray(cell.children)) return cell.children;
+  return [];
+}
+
 function isColumnBlockElement(element: Record<string, unknown>) {
   return element.aistudyBlockKind === AISTUDY_COLUMN_BLOCK_KIND;
 }
@@ -371,6 +379,30 @@ function isBorderlessTableElement(element: Record<string, unknown>) {
 
 function createTableBorder(style: (typeof BorderStyle)[keyof typeof BorderStyle], size: number, color: string) {
   return { style, size, color };
+}
+
+function createParagraphsFromCell(cell: unknown) {
+  const elements = getCellElements(cell);
+  const blocks: DocxParagraphBlock[] = [];
+  const current = { block: { runs: [], style: {} } as DocxParagraphBlock };
+  for (const element of elements) {
+    flattenElementToParagraphBlocks(element, blocks, current);
+  }
+  if (current.block.runs.length > 0 || blocks.length > 0) {
+    blocks.push(current.block);
+  }
+  while (blocks.length > 1 && blocks[blocks.length - 1].runs.length === 0) {
+    blocks.pop();
+  }
+  if (blocks.length === 0) {
+    return [
+      new Paragraph({
+        children: [new TextRun({ text: getCellText(cell) || " ", font: DEFAULT_FONT, size: 22, color: DOCX_TEXT_COLOR })],
+        spacing: { before: 0, after: 0, line: 300 }
+      })
+    ];
+  }
+  return blocks.map(createParagraphFromBlock);
 }
 
 function createTableFromElement(element: Record<string, unknown>) {
@@ -391,12 +423,7 @@ function createTableFromElement(element: Record<string, unknown>) {
         shading: columnBlock || borderless || index !== 0 ? undefined : { type: ShadingType.CLEAR, fill: "F8FAFC", color: "auto" },
         margins: columnBlock ? { top: 80, bottom: 80, left: 260, right: 260 } : borderless ? { top: 80, bottom: 80, left: 140, right: 140 } : { top: 120, bottom: 120, left: 160, right: 160 },
         width: columnBlock && exportCells.length > 0 ? { size: Math.floor(100 / exportCells.length), type: WidthType.PERCENTAGE } : undefined,
-        children: [
-          new Paragraph({
-            children: [new TextRun({ text: getCellText(cell) || " ", font: DEFAULT_FONT, size: 22, color: DOCX_TEXT_COLOR })],
-            spacing: { before: 0, after: 0, line: 300 }
-          })
-        ]
+        children: createParagraphsFromCell(cell)
       }))
     });
   });
