@@ -11,6 +11,7 @@ import type {
   KnowledgeDocumentSnapshot
 } from "./knowledgeDocumentTypes";
 import { AISTUDY_CORE_CONTRACT } from "../../domain/coreContracts";
+import { parseClipboardDocumentBlocks, type ClipboardDocumentBlock } from "../mathInput/documentClipboard";
 import { parseClipboardMathElements } from "../mathInput/mathClipboard";
 
 const DOCUMENT_EDITOR_VERSION = "canvas-editor@0.9.135";
@@ -719,6 +720,77 @@ export async function createCanvasDocumentEditor(
     const maxGap = Math.max(DOCUMENT_COLUMN_MIN_DIVIDER_GAP, sectionWidth - DOCUMENT_COLUMN_MIN_CONTENT_WIDTH);
     return Math.max(DOCUMENT_COLUMN_MIN_DIVIDER_GAP, Math.min(DOCUMENT_COLUMN_DIVIDER_GAP, maxGap));
   };
+  const appendDocumentBlockBreak = (elements: IElement[], styleSource?: IElement) => {
+    const last = elements[elements.length - 1];
+    if (last && isTextElement(last)) {
+      last.value = `${toElementText(last.value)}\n`;
+      return;
+    }
+    elements.push(styleSource ? ({ ...styleSource, value: "\n" } as IElement) : ({ value: "\n" } as IElement));
+  };
+  const toCanvasDocumentElements = (blocks: ClipboardDocumentBlock[]): IElement[] => {
+    const titleLevelMap = {
+      1: TitleLevel.FIRST,
+      2: TitleLevel.SECOND,
+      3: TitleLevel.THIRD,
+      4: TitleLevel.FOURTH,
+      5: TitleLevel.FIFTH,
+      6: TitleLevel.SIXTH
+    } as const;
+    const elements: IElement[] = [];
+    let activeList: { type: "ul" | "ol"; id: string } | null = null;
+
+    blocks.forEach((block, index) => {
+      const isLastBlock = index === blocks.length - 1;
+      if (block.kind !== "listItem") activeList = null;
+
+      if (block.kind === "separator") {
+        elements.push({
+          value: "",
+          type: ElementType.SEPARATOR,
+          dashArray: [4, 2],
+          lineWidth: 1,
+          color: "#94a3b8"
+        } as IElement);
+        if (!isLastBlock) appendDocumentBlockBreak(elements);
+        return;
+      }
+
+      let blockElements = toCanvasInlineElements(block.elements);
+      if (blockElements.length === 0) return;
+
+      if (block.kind === "heading") {
+        const level = titleLevelMap[block.level] ?? TitleLevel.THIRD;
+        blockElements = blockElements.map((element) => ({ ...element, level } as IElement));
+      }
+
+      if (block.kind === "paragraph" && block.align === "center") {
+        blockElements = blockElements.map((element) => ({ ...element, rowFlex: RowFlex.CENTER } as IElement));
+      }
+
+      if (block.kind === "listItem") {
+        if (!activeList || activeList.type !== block.listType) {
+          activeList = { type: block.listType, id: createSmartListId() };
+        }
+        const listType = block.listType === "ol" ? ListType.OL : ListType.UL;
+        const listStyle = block.listType === "ol" ? ListStyle.DECIMAL : ListStyle.DISC;
+        blockElements = blockElements.map(
+          (element) =>
+            ({
+              ...element,
+              listType,
+              listStyle,
+              listId: activeList?.id
+            }) as IElement
+        );
+      }
+
+      elements.push(...blockElements);
+      if (!isLastBlock) appendDocumentBlockBreak(elements, blockElements[blockElements.length - 1]);
+    });
+
+    return elements;
+  };
   const createColumnBlockElement = (
     columns: KnowledgeDocumentColumnCount,
     values: IElement[][] = [],
@@ -1015,6 +1087,21 @@ export async function createCanvasDocumentEditor(
   };
   const handlePaste = (event: ClipboardEvent) => {
     markUserEdited();
+    const documentBlocks = parseClipboardDocumentBlocks(event.clipboardData);
+    if (documentBlocks) {
+      const canvasElements = toCanvasDocumentElements(documentBlocks);
+      if (canvasElements.length > 0) {
+        event.preventDefault();
+        event.stopPropagation();
+        runFormatCommand(() =>
+          editor.command.executeInsertElementList(canvasElements, {
+            ignoreContextKeys: ["level", "listType", "listStyle", "listId", "rowFlex"] as Array<keyof IElement>
+          })
+        );
+        return;
+      }
+    }
+
     const elements = parseClipboardMathElements(event.clipboardData);
     if (!elements) return;
     event.preventDefault();

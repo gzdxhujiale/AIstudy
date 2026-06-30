@@ -10,6 +10,7 @@ Current files:
 - `canvasEditorAdapter.ts`: the only place that creates and controls the canvas editor instance.
 - `knowledgeDocumentTypes.ts`: document snapshot, status, save input, command, and format-state types.
 - `../mathInput/mathClipboard.ts`: shared ChatGPT/KaTeX/MathML/plain-text math paste normalization used before inserting into canvas-editor.
+- `../mathInput/documentClipboard.ts`: shared ChatGPT/math-rich document paste normalization that turns headings, lists, separators, display math, and paragraphs into semantic blocks before the adapter writes canvas-editor elements.
 
 ## Boundaries
 
@@ -38,3 +39,4 @@ Current files:
 - Exporters must read from the active document snapshot and keep generated files outside MySQL.
 - New asset handling must write to asset storage/link tables instead of embedding binaries.
 - Math paste behavior must stay shared with textbook notes through `features/mathInput`; do not add document-only symbol replacements in this adapter.
+- ChatGPT or webpage rich-text paste must not inherit external CSS spacing. Preserve semantic structure, then render with AIstudy document spacing and snapshot attributes.

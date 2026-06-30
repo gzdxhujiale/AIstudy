@@ -120,6 +120,7 @@ export function normalizeMathText(value: string) {
     .replace(/\r\n?/g, "\n")
     .replace(/\u00a0/g, " ")
     .replace(/\u2212/g, "-")
+    .replace(/\\qquad(?![A-Za-z])|\\quad(?![A-Za-z])/g, " ")
     .replace(/\\left|\\right/g, "")
     .replace(/\\\{/g, "{")
     .replace(/\\\}/g, "}")
@@ -174,7 +175,8 @@ export function normalizeMathText(value: string) {
     .replace(/\binfty\b/g, "∞")
     .replace(/\bneq\b|\bne\b/g, "≠")
     .replace(/\bgeq\b/g, "≥")
-    .replace(/\bleq\b/g, "≤");
+    .replace(/\bleq\b/g, "≤")
+    .replace(/\bq?quad\b/g, " ");
 
   const mathToken = String.raw`[A-Za-z0-9ℝℕℤℚα-ωΑ-Ω)\]}]`;
   const mathTarget = String.raw`[A-Za-z0-9ℝℕℤℚα-ωΑ-Ω([{]`;
@@ -239,7 +241,7 @@ function parseMathMlNode(node: Element, inheritedType?: ScriptType): MathInlineE
   return Array.from(node.childNodes).flatMap((child) => parseDomMathElements(child, inheritedType));
 }
 
-function parseDomMathElements(node: Node | undefined, inheritedType?: ScriptType): MathInlineElement[] {
+export function parseDomMathElements(node: Node | undefined, inheritedType?: ScriptType): MathInlineElement[] {
   if (!node) return [];
   if (node.nodeType === Node.TEXT_NODE) {
     const value = node.textContent ?? "";
@@ -283,6 +285,7 @@ function hasMathSignal(value: string) {
   return normalized !== value
     || MATH_SYMBOL_PATTERN.test(normalized)
     || SCRIPT_SIGNAL_PATTERN.test(value)
+    || /\\q?quad(?![A-Za-z])|\bq?quad\b/u.test(value)
     || /[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ]/u.test(value)
     || /[A-Za-z0-9ℝℕℤℚα-ωΑ-Ω)\]}]\s*(?:right)?arrow\s*[A-Za-z0-9ℝℕℤℚα-ωΑ-Ω([{]/u.test(value)
     || /[A-Za-z0-9ℝℕℤℚα-ωΑ-Ω)\]}]\s*(?:subseteq|subset|mapsto)\s*[A-Za-z0-9ℝℕℤℚα-ωΑ-Ω([{]/u.test(value);
