@@ -418,7 +418,6 @@ function createTableFromElement(element: Record<string, unknown>) {
       ? rawCells.filter((cell) => !isColumnBlockGapCell(cell)).slice(0, columnCount || undefined)
       : rawCells;
     return new TableRow({
-      cantSplit: true,
       children: exportCells.map((cell, index) => new TableCell({
         shading: columnBlock || borderless || index !== 0 ? undefined : { type: ShadingType.CLEAR, fill: "F8FAFC", color: "auto" },
         margins: columnBlock ? { top: 80, bottom: 80, left: 260, right: 260 } : borderless ? { top: 80, bottom: 80, left: 140, right: 140 } : { top: 120, bottom: 120, left: 160, right: 160 },

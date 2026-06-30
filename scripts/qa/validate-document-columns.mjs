@@ -98,6 +98,7 @@ assert(columnCells.length === 2, "column block spacer cells should not be export
 assert((columnCells[0].match(/<w:p(?:\s|>)/g) ?? []).length >= 3, "left column should export one vertical paragraph per pasted line");
 assert((columnCells[1].match(/<w:p(?:\s|>)/g) ?? []).length >= 3, "right column should export one vertical paragraph per pasted line");
 assert(!columnXml.includes('w:fill="F8FAFC"'), "column block export should not apply normal table first-column shading");
+assert(!columnXml.includes("<w:cantSplit"), "column block rows should allow Word/WPS to paginate across pages");
 
 const normalizedColumnSnapshot = normalizeDocumentSnapshot(createSnapshot([
   {
@@ -171,5 +172,6 @@ const normalTableXml = await readDocumentXml(createSnapshot([
 assert(normalTableXml.includes("普通表格") && normalTableXml.includes("第二列"), "normal table text should be exported");
 assert((normalTableXml.match(/w:val="single"/g) ?? []).length >= 6, "normal table borders should remain visible");
 assert(normalTableXml.includes('w:fill="F8FAFC"'), "normal table first-column shading should remain unchanged");
+assert(!normalTableXml.includes("<w:cantSplit"), "normal table rows should allow Word/WPS to paginate across pages");
 
 console.log("document columns export policy: ok");
