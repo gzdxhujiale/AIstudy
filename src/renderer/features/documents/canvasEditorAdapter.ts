@@ -756,6 +756,16 @@ export async function createCanvasDocumentEditor(
         return;
       }
 
+      if (block.kind === "math") {
+        elements.push({
+          value: block.latex,
+          type: ElementType.LATEX,
+          rowFlex: RowFlex.CENTER
+        } as IElement);
+        if (!isLastBlock) appendDocumentBlockBreak(elements);
+        return;
+      }
+
       let blockElements = toCanvasInlineElements(block.elements);
       if (blockElements.length === 0) return;
 

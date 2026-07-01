@@ -23,6 +23,10 @@ export type ClipboardDocumentBlock =
     }
   | {
       kind: "separator";
+    }
+  | {
+      kind: "math";
+      latex: string;
     };
 
 const BLOCK_TAGS = new Set([
@@ -113,7 +117,84 @@ function shouldIgnoreElement(node: Element) {
 function isDisplayMathElement(node: Element) {
   const tagName = getTagName(node);
   if (node.classList.contains("katex-display")) return true;
+  if (node.classList.contains("math-display")) return true;
   return tagName === "math" && node.getAttribute("display") === "block";
+}
+
+function stripMathDelimiters(value: string) {
+  return value
+    .trim()
+    .replace(/^\s*(?:\$\$|\\\[|\\\()\s*/u, "")
+    .replace(/\s*(?:\$\$|\\\]|\\\))\s*$/u, "")
+    .trim();
+}
+
+function latexEscapeText(value: string) {
+  return value
+    .replace(/\\/g, "")
+    .replace(/([#$%&])/g, "\\$1")
+    .replace(/\{/g, "\\{")
+    .replace(/\}/g, "\\}")
+    .replace(/ℝ/g, "\\mathbb{R}")
+    .replace(/ℕ/g, "\\mathbb{N}")
+    .replace(/ℤ/g, "\\mathbb{Z}")
+    .replace(/ℚ/g, "\\mathbb{Q}")
+    .replace(/→/g, "\\to ")
+    .replace(/↦/g, "\\mapsto ")
+    .replace(/⊆/g, "\\subseteq ")
+    .replace(/⊂/g, "\\subset ")
+    .replace(/∉/g, "\\notin ")
+    .replace(/∈/g, "\\in ")
+    .replace(/∞/g, "\\infty ")
+    .replace(/≠/g, "\\ne ")
+    .replace(/≥/g, "\\ge ")
+    .replace(/≤/g, "\\le ")
+    .replace(/√/g, "\\sqrt{}");
+}
+
+function inlineElementsToLatex(elements: MathInlineElement[]) {
+  return elements.map((element) => {
+    const value = latexEscapeText(element.value);
+    if (element.type === "superscript") return `^{${value}}`;
+    if (element.type === "subscript") return `_{${value}}`;
+    return value;
+  }).join("");
+}
+
+export function normalizeDisplayMathLatex(value: string) {
+  const stripped = stripMathDelimiters(value).replace(/\r\n?/g, "\n").trim();
+  if (!stripped) return "";
+  if (/\\[A-Za-z]+/u.test(stripped)) return stripped.replace(/\u2212/g, "-");
+  return inlineElementsToLatex(parseMathInlineElements(stripped));
+}
+
+function readLatexAnnotation(node: Element) {
+  const annotation = node.matches('annotation[encoding="application/x-tex"]')
+    ? node
+    : node.querySelector('annotation[encoding="application/x-tex"]');
+  return annotation?.textContent?.trim() ?? "";
+}
+
+function readDataLatex(node: Element) {
+  return node.getAttribute("data-latex")
+    || node.getAttribute("data-tex")
+    || node.getAttribute("data-math")
+    || "";
+}
+
+function readScriptLatex(node: Element) {
+  const script = node.matches('script[type^="math/tex"]')
+    ? node
+    : node.querySelector('script[type^="math/tex"]');
+  return script?.textContent?.trim() ?? "";
+}
+
+function extractLatexFromElement(node: Element) {
+  return normalizeDisplayMathLatex(
+    readLatexAnnotation(node)
+      || readDataLatex(node)
+      || readScriptLatex(node)
+  );
 }
 
 function hasBlockChild(node: Element) {
@@ -162,6 +243,8 @@ function parseElementAsBlocks(node: Element, parentListType?: "ul" | "ol"): Clip
   const tagName = getTagName(node);
   if (tagName === "hr") return [{ kind: "separator" }];
   if (isDisplayMathElement(node)) {
+    const latex = extractLatexFromElement(node);
+    if (latex) return [{ kind: "math", latex }];
     const block = createTextBlock("paragraph", parseDomMathElements(node), { align: "center" });
     return block ? [block] : [];
   }
@@ -208,9 +291,11 @@ function htmlHasDocumentSignal(html: string, text: string) {
 function normalizeBlocks(blocks: ClipboardDocumentBlock[]) {
   const normalized: ClipboardDocumentBlock[] = [];
   for (const block of blocks) {
-    if (block.kind === "separator") {
+    if (block.kind === "separator" || block.kind === "math") {
       const previous = normalized[normalized.length - 1];
-      if (previous?.kind !== "separator") normalized.push(block);
+      if (block.kind === "separator" && previous?.kind === "separator") continue;
+      if (block.kind === "math" && block.latex.trim()) normalized.push({ ...block, latex: normalizeDisplayMathLatex(block.latex) });
+      if (block.kind === "separator") normalized.push(block);
       continue;
     }
 
@@ -252,6 +337,14 @@ function isLikelySectionHeading(value: string) {
   return CHINESE_HEADING_PATTERN.test(trimmed);
 }
 
+function isLikelyMathTopicHeading(value: string) {
+  const trimmed = value.trim();
+  if (trimmed.length < 2 || trimmed.length > 18) return false;
+  if (!CHINESE_TEXT_PATTERN.test(trimmed)) return false;
+  if (/[，,。.!！？?：:；;]/u.test(trimmed)) return false;
+  return /(?:函数|数列|极限|导数|微分|积分|矩阵|向量|行列式|概率|分布|统计|方程|不等式|定理|定义|性质|公式|图像|图象|曲线|级数|特征值|特征向量)/u.test(trimmed);
+}
+
 function plainTextHasDocumentSignal(text: string) {
   const lines = text.replace(/\r\n?/g, "\n").split("\n").map((line) => line.trim()).filter(Boolean);
   if (lines.length < 2) return false;
@@ -267,9 +360,34 @@ function plainTextHasDocumentSignal(text: string) {
 
 export function parsePlainTextDocumentBlocks(text: string): ClipboardDocumentBlock[] {
   const blocks: ClipboardDocumentBlock[] = [];
+  let mathFence: { end: RegExp; lines: string[] } | null = null;
   for (const rawLine of text.replace(/\r\n?/g, "\n").split("\n")) {
     const line = rawLine.trim();
+    if (mathFence) {
+      if (mathFence.end.test(line)) {
+        const latex = normalizeDisplayMathLatex(mathFence.lines.join("\n"));
+        if (latex) blocks.push({ kind: "math", latex });
+        mathFence = null;
+      } else {
+        mathFence.lines.push(line);
+      }
+      continue;
+    }
     if (!line) continue;
+    if (/^\\\[\s*$/u.test(line)) {
+      mathFence = { end: /^\\\]\s*$/u, lines: [] };
+      continue;
+    }
+    if (/^\$\$\s*$/u.test(line)) {
+      mathFence = { end: /^\$\$\s*$/u, lines: [] };
+      continue;
+    }
+    const inlineFence = line.match(/^(?:\$\$|\\\[)\s*([\s\S]+?)\s*(?:\$\$|\\\])$/u);
+    if (inlineFence) {
+      const latex = normalizeDisplayMathLatex(inlineFence[1]);
+      if (latex) blocks.push({ kind: "math", latex });
+      continue;
+    }
     if (HORIZONTAL_RULE_PATTERN.test(line)) {
       blocks.push({ kind: "separator" });
       continue;
@@ -302,11 +420,28 @@ export function parsePlainTextDocumentBlocks(text: string): ClipboardDocumentBlo
       continue;
     }
 
+    if (isLikelyMathTopicHeading(line)) {
+      blocks.push({ kind: "heading", level: 3, elements: parseMathInlineElements(line) });
+      continue;
+    }
+
+    if (isDisplayMathLine(line)) {
+      const latex = normalizeDisplayMathLatex(line);
+      blocks.push(latex
+        ? { kind: "math", latex }
+        : { kind: "paragraph", align: "center", elements: parseMathInlineElements(line) }
+      );
+      continue;
+    }
+
     blocks.push({
       kind: "paragraph",
-      align: isDisplayMathLine(line) ? "center" : undefined,
       elements: parseMathInlineElements(line)
     });
+  }
+  if (mathFence) {
+    const latex = normalizeDisplayMathLatex(mathFence.lines.join("\n"));
+    if (latex) blocks.push({ kind: "math", latex });
   }
   return normalizeBlocks(blocks);
 }

@@ -91,15 +91,32 @@ assert(listBlocks.length >= 5, "bullet items should stay list items");
 assert(listBlocks.every((block) => block.listType === "ul"), "bullet items should be unordered list items");
 
 const formulaBlocks = blocks.filter((block) => block.kind === "paragraph" && block.align === "center");
-assert(formulaBlocks.length >= 3, "standalone formula lines should become centered paragraphs");
-const formulaText = formulaBlocks.map((block) => flatten(block.elements)).join("\n");
-assert(!formulaText.includes("quad"), "TeX spacing command must not leak as literal quad");
-assert(formulaText.includes("a>0") && formulaText.includes("a≠1"), "formula conditions should preserve comparison symbols");
+const mathBlocks = blocks.filter((block) => block.kind === "math");
+assert(mathBlocks.length >= 3, "standalone formula lines should become native math blocks");
+assert(formulaBlocks.length === 0, "standalone formula lines should not fall back to centered plain paragraphs");
+const latexText = mathBlocks.map((block) => block.latex).join("\n");
+assert(latexText.includes("x^{a}") || latexText.includes("x^a"), "power formula should be preserved as latex");
+assert(latexText.includes("a^{x}") || latexText.includes("a^x"), "exponential formula should be preserved as latex");
+assert(latexText.includes("log_{a}") || latexText.includes("\\log_a"), "log formula should preserve subscript structure");
+assert(latexText.includes("\\quad") || !latexText.includes("quad"), "TeX spacing should stay inside a native latex block");
+assert(latexText.includes("a>0") && (latexText.includes("a\\ne1") || latexText.includes("a≠1")), "formula conditions should preserve comparison symbols");
 
-const formulaElements = formulaBlocks.flatMap((block) => block.elements);
-assert(hasTyped(formulaElements, "a", "superscript"), "x^a should preserve superscript structure");
-assert(hasTyped(formulaElements, "x", "superscript"), "a^x should preserve superscript structure");
-assert(hasTyped(formulaElements, "a", "subscript"), "log_a should preserve subscript structure");
+const inlineMathBlocks = documentClipboard.parsePlainTextDocumentBlocks([
+  "偶函数",
+  "如果:",
+  "f(-x)=f(x)",
+  "例如:",
+  "f(x)=x²",
+  "因为:",
+  "$$",
+  "f(-x)=(-x)^2=x^2=f(x)",
+  "$$"
+].join("\n"));
+const inlineMathLatex = inlineMathBlocks.filter((block) => block.kind === "math").map((block) => block.latex).join("\n");
+assert(inlineMathBlocks.some((block) => block.kind === "heading" && flatten(block.elements).includes("偶函数")), "short Chinese math title should stay a heading");
+assert(inlineMathLatex.includes("f(-x)=f(x)"), "even function identity should become a math block");
+assert(inlineMathLatex.includes("x^{2}") || inlineMathLatex.includes("x^2"), "unicode superscript should normalize into latex exponent");
+assert(inlineMathLatex.includes("(-x)^2") || inlineMathLatex.includes("(-x)^{2}"), "fenced formula should stay a math block");
 
 const normalized = mathClipboard.normalizeMathText("y = a^x \\quad (a>0, a\\ne1)");
 assert(!normalized.includes("quad") && normalized.includes("a≠1"), "math normalization should remove quad and normalize ne");
