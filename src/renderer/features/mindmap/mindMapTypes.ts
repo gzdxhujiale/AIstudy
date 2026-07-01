@@ -3,6 +3,7 @@ export type SimpleMindMapNodeData = {
   text: string;
   note?: string;
   expand?: boolean;
+  aistudyCatalogBoundary?: boolean;
   [key: string]: unknown;
 };
 
@@ -129,6 +130,8 @@ export type MindMapOutlineItem = {
   order: number;
   source: "mindmap";
   childCount: number;
+  hiddenChildCount: number;
+  catalogBoundary: boolean;
   children: MindMapOutlineItem[];
 };
 

@@ -21,6 +21,7 @@ Current files:
 - Node titles can repeat; `data.uid` is the stable node key.
 - Renderer code must save through `window.aistudyMindMaps` or the local snapshot fallback.
 - Topic bubble sizing must be stored in node data and rendered through the adapter so text, shape, snapshot, undo, export, and reopen stay aligned.
+- Catalog boundary uses `data.aistudyCatalogBoundary` to stop only the right-side catalog projection at that node; the real mind-map children remain editable and persisted.
 
 ## User Flow
 
@@ -37,6 +38,7 @@ Current files:
 - Update `mindMapSnapshot.ts` before changing node identity, catalog hierarchy, or snapshot fields.
 - Add third-party editor behavior through the adapter handle, not through workspace components.
 - Catalog state such as expanded/collapsed UI is local UI state and must not become stored domain data.
+- Catalog boundary is not collapse state. It is stored node data because it changes the saved catalog projection after reopen.
 - Catalog hierarchy styling is a reading aid only. It must derive from `MindMapOutlineItem.level` and must not mutate node text format or mind-map snapshot data.
 - New exports should use adapter commands and avoid scraping DOM state.
 - Resize handles belong to topic bubbles, not editor text boxes. Dragging the right edge should resize the bubble while the text layout moves with it.

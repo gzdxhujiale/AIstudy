@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronRight, Copy, Trash2 } from "lucide-react";
+import { ChevronRight, Copy, ListTree, ListX, Trash2 } from "lucide-react";
 import type { MindMapOutlineItem } from "./mindMapTypes";
 
 type MindMapCatalogProps = {
@@ -10,6 +10,7 @@ type MindMapCatalogProps = {
   onNodeSelect?: (item: MindMapOutlineItem) => void;
   onNodeDelete?: (item: MindMapOutlineItem) => void;
   onNodeCopyDocumentPath?: (item: MindMapOutlineItem) => Promise<void> | void;
+  onNodeToggleCatalogBoundary?: (item: MindMapOutlineItem, enabled: boolean) => Promise<void> | void;
 };
 
 export type MindMapCatalogCollapseRequest = {
@@ -135,7 +136,16 @@ function renderCatalogItems(items: MindMapOutlineItem[], options: CatalogRenderO
   );
 }
 
-export function MindMapCatalog({ items, selectedNodeId, resetKey, collapseRequest, onNodeSelect, onNodeDelete, onNodeCopyDocumentPath }: MindMapCatalogProps) {
+export function MindMapCatalog({
+  items,
+  selectedNodeId,
+  resetKey,
+  collapseRequest,
+  onNodeSelect,
+  onNodeDelete,
+  onNodeCopyDocumentPath,
+  onNodeToggleCatalogBoundary
+}: MindMapCatalogProps) {
   const [collapsedPaths, setCollapsedPaths] = React.useState<Set<string>>(() => collectDefaultCollapsedPaths(items));
   const [branchesOnly, setBranchesOnly] = React.useState(false);
   const [contextMenu, setContextMenu] = React.useState<CatalogContextMenuState | null>(null);
@@ -230,12 +240,13 @@ export function MindMapCatalog({ items, selectedNodeId, resetKey, collapseReques
     (event: React.MouseEvent<HTMLDivElement>, item: MindMapOutlineItem) => {
       const canCopy = Boolean(onNodeCopyDocumentPath && item.nodeId);
       const canDelete = Boolean(onNodeDelete && item.nodeId && item.parentNodeId);
-      if (!canCopy && !canDelete) return;
+      const canToggleBoundary = Boolean(onNodeToggleCatalogBoundary && item.nodeId && item.parentNodeId);
+      if (!canCopy && !canDelete && !canToggleBoundary) return;
       event.preventDefault();
       event.stopPropagation();
       onNodeSelect?.(item);
       const width = 178;
-      const height = 12 + (canCopy ? 30 : 0) + (canDelete ? 30 : 0);
+      const height = 12 + (canToggleBoundary ? 30 : 0) + (canCopy ? 30 : 0) + (canDelete ? 30 : 0);
       setContextMenu({
         item,
         x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
@@ -243,7 +254,7 @@ export function MindMapCatalog({ items, selectedNodeId, resetKey, collapseReques
         copied: false
       });
     },
-    [onNodeCopyDocumentPath, onNodeDelete, onNodeSelect]
+    [onNodeCopyDocumentPath, onNodeDelete, onNodeSelect, onNodeToggleCatalogBoundary]
   );
 
   const runCopyDocumentPath = React.useCallback(async () => {
@@ -268,6 +279,13 @@ export function MindMapCatalog({ items, selectedNodeId, resetKey, collapseReques
     onNodeDelete?.(item);
   }, [contextMenu, onNodeDelete]);
 
+  const runToggleCatalogBoundary = React.useCallback(async () => {
+    if (!contextMenu || !onNodeToggleCatalogBoundary) return;
+    const item = contextMenu.item;
+    setContextMenu(null);
+    await onNodeToggleCatalogBoundary(item, !item.catalogBoundary);
+  }, [contextMenu, onNodeToggleCatalogBoundary]);
+
   return (
     <>
       {renderCatalogItems(items, {
@@ -287,6 +305,12 @@ export function MindMapCatalog({ items, selectedNodeId, resetKey, collapseReques
           onMouseDown={(event) => event.stopPropagation()}
           onContextMenu={(event) => event.preventDefault()}
         >
+          {contextMenu.item.nodeId && contextMenu.item.parentNodeId && onNodeToggleCatalogBoundary ? (
+            <button type="button" role="menuitem" onClick={() => void runToggleCatalogBoundary()}>
+              {contextMenu.item.catalogBoundary ? <ListTree size={14} /> : <ListX size={14} />}
+              <span>{contextMenu.item.catalogBoundary ? "恢复下级目录" : "设为终极目录"}</span>
+            </button>
+          ) : null}
           {contextMenu.item.nodeId && onNodeCopyDocumentPath ? (
             <button type="button" role="menuitem" onClick={() => void runCopyDocumentPath()}>
               <Copy size={14} />

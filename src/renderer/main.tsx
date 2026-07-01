@@ -47,6 +47,7 @@ import {
 } from "./features/mindmap/mindMapShortcutSettings";
 import {
   MindMapWorkspace,
+  type WorkspaceCatalogBoundaryRequest,
   type WorkspaceEditorMode,
   type WorkspaceModeChangeRequest,
   type WorkspaceNodeDeletionRequest,
@@ -899,6 +900,7 @@ function App() {
   const [modeChangeRequest, setModeChangeRequest] = React.useState<WorkspaceModeChangeRequest | null>(null);
   const [nodeSelectionRequest, setNodeSelectionRequest] = React.useState<WorkspaceNodeSelectionRequest | null>(null);
   const [nodeDeletionRequest, setNodeDeletionRequest] = React.useState<WorkspaceNodeDeletionRequest | null>(null);
+  const [catalogBoundaryRequest, setCatalogBoundaryRequest] = React.useState<WorkspaceCatalogBoundaryRequest | null>(null);
   const [catalogCollapseRequest, setCatalogCollapseRequest] = React.useState<MindMapCatalogCollapseRequest | null>(null);
   const [activeSection, setActiveSection] = React.useState<AppSection>("knowledge");
   const [isLibraryPaneCollapsed, setIsLibraryPaneCollapsed] = React.useState(false);
@@ -906,6 +908,7 @@ function App() {
   const [detailPaneMode, setDetailPaneMode] = React.useState<DetailPaneMode>("catalog");
   const [externalContentRevision, setExternalContentRevision] = React.useState(0);
   const catalogCollapseNonceRef = React.useRef(0);
+  const catalogBoundaryNonceRef = React.useRef(0);
   const workspaceModePersistRef = React.useRef("");
 
   const openDocumentFormatPane = React.useCallback(() => {
@@ -1032,6 +1035,7 @@ function App() {
     setModeChangeRequest(null);
     setNodeSelectionRequest(null);
     setNodeDeletionRequest(null);
+    setCatalogBoundaryRequest(null);
   }, [activeCourseId]);
 
   function openCreateDialog(sectionId: string | null = activeCourse?.sectionId ?? null) {
@@ -1170,6 +1174,16 @@ function App() {
     const confirmed = window.confirm(`确定删除“${item.title}”及其分支和文档内容吗？`);
     if (!confirmed) return;
     setNodeDeletionRequest({ nodeId: item.nodeId, nonce: Date.now() });
+  }
+
+  function toggleCatalogBoundary(item: MindMapOutlineItem, enabled: boolean) {
+    if (!item.nodeId || !item.parentNodeId) return;
+    catalogBoundaryNonceRef.current += 1;
+    setCatalogBoundaryRequest({
+      nodeId: item.nodeId,
+      enabled,
+      nonce: catalogBoundaryNonceRef.current
+    });
   }
 
   async function copyCatalogNodeDocumentPath(item: MindMapOutlineItem) {
@@ -1358,6 +1372,7 @@ function App() {
               modeChangeRequest={modeChangeRequest}
               nodeSelectionRequest={nodeSelectionRequest}
               nodeDeletionRequest={nodeDeletionRequest}
+              catalogBoundaryRequest={catalogBoundaryRequest}
               onEditorModeChange={handleWorkspaceEditorModeChanged}
               onOutlineChanged={setMindMapOutline}
               onMindMapIdChanged={setActiveMindMapId}
@@ -1429,6 +1444,7 @@ function App() {
                 onNodeSelect={selectCatalogNode}
                 onNodeCopyDocumentPath={copyCatalogNodeDocumentPath}
                 onNodeDelete={deleteCatalogNode}
+                onNodeToggleCatalogBoundary={toggleCatalogBoundary}
               />
             </nav>
           ) : (

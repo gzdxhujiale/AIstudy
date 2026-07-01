@@ -30,6 +30,7 @@ import {
   countNodes,
   createInitialSnapshot,
   createMindMapStructureSignature,
+  MIND_MAP_CATALOG_BOUNDARY_KEY,
   MIND_MAP_LAYOUT_OPTIONS,
   normalizeLayout,
   normalizeSnapshot
@@ -72,6 +73,12 @@ export type WorkspaceNodeDeletionRequest = {
   nonce: number;
 };
 
+export type WorkspaceCatalogBoundaryRequest = {
+  nodeId: string;
+  enabled: boolean;
+  nonce: number;
+};
+
 type MindMapWorkspaceProps = {
   courseId: string | null;
   courseName: string;
@@ -80,6 +87,7 @@ type MindMapWorkspaceProps = {
   modeChangeRequest: WorkspaceModeChangeRequest | null;
   nodeSelectionRequest: WorkspaceNodeSelectionRequest | null;
   nodeDeletionRequest: WorkspaceNodeDeletionRequest | null;
+  catalogBoundaryRequest: WorkspaceCatalogBoundaryRequest | null;
   onEditorModeChange: (mode: WorkspaceEditorMode) => void;
   onOutlineChanged?: (outline: MindMapOutlineItem[]) => void;
   onMindMapIdChanged?: (mapId: string | null) => void;
@@ -408,6 +416,49 @@ function removeNodeSubtree(
   return { root, removedNode: null, fallbackNodeId: null };
 }
 
+function setNodeCatalogBoundary(
+  root: SimpleMindMapNode,
+  nodeId: string,
+  enabled: boolean
+): { root: SimpleMindMapNode; updatedNode: SimpleMindMapNode | null; changed: boolean } {
+  const currentNodeId = getNodeId(root);
+  if (currentNodeId === nodeId) {
+    const nextData = { ...root.data };
+    const wasEnabled = nextData[MIND_MAP_CATALOG_BOUNDARY_KEY] === true;
+    if (enabled) {
+      nextData[MIND_MAP_CATALOG_BOUNDARY_KEY] = true;
+    } else {
+      delete nextData[MIND_MAP_CATALOG_BOUNDARY_KEY];
+    }
+
+    const nextRoot = {
+      ...root,
+      data: nextData,
+      children: Array.isArray(root.children) ? root.children : []
+    };
+    return { root: nextRoot, updatedNode: nextRoot, changed: wasEnabled !== enabled };
+  }
+
+  const children = Array.isArray(root.children) ? root.children : [];
+  for (let index = 0; index < children.length; index += 1) {
+    const result = setNodeCatalogBoundary(children[index], nodeId, enabled);
+    if (!result.updatedNode) continue;
+    const nextChildren = [...children];
+    nextChildren[index] = result.root;
+    return {
+      root: {
+        ...root,
+        data: { ...root.data },
+        children: nextChildren
+      },
+      updatedNode: result.updatedNode,
+      changed: result.changed
+    };
+  }
+
+  return { root, updatedNode: null, changed: false };
+}
+
 function replaceNodeInTree(
   root: SimpleMindMapNode,
   nodeId: string,
@@ -512,6 +563,7 @@ export function MindMapWorkspace({
   modeChangeRequest,
   nodeSelectionRequest,
   nodeDeletionRequest,
+  catalogBoundaryRequest,
   onEditorModeChange,
   onOutlineChanged,
   onMindMapIdChanged,
@@ -528,6 +580,7 @@ export function MindMapWorkspace({
   const activeSaveRef = React.useRef<Promise<MindMapDocument | null>>(Promise.resolve(null));
   const loadSequenceRef = React.useRef(0);
   const handledNodeDeletionNonceRef = React.useRef<number | null>(null);
+  const handledCatalogBoundaryNonceRef = React.useRef<number | null>(null);
   const loadedRootNodeIdRef = React.useRef<string | null>(null);
   const [snapshot, setSnapshot] = React.useState<MindMapSnapshot | null>(null);
   const snapshotRef = React.useRef<MindMapSnapshot | null>(null);
@@ -875,6 +928,60 @@ export function MindMapWorkspace({
     [commitSnapshotForUi, courseId, courseName, flushPendingSave, focusedNodeId, mapId, publishSelectedNode]
   );
 
+  const setCatalogBoundary = React.useCallback(
+    async (nodeId: string, enabled: boolean) => {
+      if (!courseId || !nodeId) return;
+
+      const currentCanvasSnapshot = canvasRef.current?.getSnapshot();
+      const currentMasterSnapshot = currentCanvasSnapshot
+        ? mergeFocusedSnapshot(snapshotRef.current, focusedNodeId, currentCanvasSnapshot)
+        : snapshotRef.current;
+      if (!currentMasterSnapshot) return;
+
+      const rootNodeId = getNodeId(currentMasterSnapshot.root);
+      if (!rootNodeId || nodeId === rootNodeId) {
+        setError("根主题不能设为终极目录");
+        return;
+      }
+
+      const result = setNodeCatalogBoundary(currentMasterSnapshot.root, nodeId, enabled);
+      if (!result.updatedNode) return;
+      if (!result.changed) {
+        setError("");
+        return;
+      }
+
+      const nextSnapshot: MindMapSnapshot = {
+        ...currentMasterSnapshot,
+        root: result.root,
+        view: undefined,
+        updatedAt: new Date().toISOString()
+      };
+      const nextMapId = mapId ?? createMindMapId();
+      if (!mapId) {
+        setMapId(nextMapId);
+      }
+
+      commitSnapshotForUi(nextSnapshot, true);
+      setError("");
+
+      const nextFocusedSnapshot = createFocusedSnapshot(nextSnapshot, focusedNodeId);
+      canvasRef.current?.setSnapshot(nextFocusedSnapshot);
+      if (selectedNodeRef.current.id) {
+        canvasRef.current?.selectNode(selectedNodeRef.current.id);
+      }
+
+      pendingSaveRef.current = {
+        courseId,
+        mapId: nextMapId,
+        title: courseName,
+        snapshot: nextSnapshot
+      };
+      await flushPendingSave(false);
+    },
+    [commitSnapshotForUi, courseId, courseName, flushPendingSave, focusedNodeId, mapId]
+  );
+
   const exportMap = React.useCallback(async () => {
     if (!courseId || !isReady || isLoading) return;
     setIsExporting(true);
@@ -991,6 +1098,14 @@ export function MindMapWorkspace({
     handledNodeDeletionNonceRef.current = nonce;
     void deleteMindMapBranch(nodeId);
   }, [deleteMindMapBranch, nodeDeletionRequest]);
+
+  React.useEffect(() => {
+    const nodeId = catalogBoundaryRequest?.nodeId;
+    const nonce = catalogBoundaryRequest?.nonce ?? null;
+    if (!nodeId || nonce === null || handledCatalogBoundaryNonceRef.current === nonce) return;
+    handledCatalogBoundaryNonceRef.current = nonce;
+    void setCatalogBoundary(nodeId, catalogBoundaryRequest.enabled);
+  }, [catalogBoundaryRequest, setCatalogBoundary]);
 
   const applyTextFormat = React.useCallback(
     (patch: MindMapTextFormatPatch) => {

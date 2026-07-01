@@ -17,6 +17,7 @@ export const MIND_MAP_CATALOG_RELATION = Object.freeze({
   pathSeparator: ".",
   firstOrder: 1
 });
+export const MIND_MAP_CATALOG_BOUNDARY_KEY = "aistudyCatalogBoundary";
 
 export const MIND_MAP_LAYOUT_OPTIONS: Array<{ value: MindMapLayoutType; label: string }> = [
   { value: "logicalStructure", label: "右向逻辑" },
@@ -213,6 +214,10 @@ function readNodeTitle(node: SimpleMindMapNode, fallbackTitle = UNTITLED_NODE_TI
   return typeof node.data?.text === "string" && node.data.text.trim() ? node.data.text.trim() : fallbackTitle;
 }
 
+export function isMindMapCatalogBoundary(node: SimpleMindMapNode | null | undefined) {
+  return node?.data?.[MIND_MAP_CATALOG_BOUNDARY_KEY] === true;
+}
+
 export function normalizeMindMapTree(root: SimpleMindMapNode | null | undefined, fallbackTitle = "未命名导图"): SimpleMindMapNode {
   const source = root ?? createRootNode(fallbackTitle);
   const usedIds = new Set<string>();
@@ -269,7 +274,8 @@ export function createMindMapStructureSignature(root: SimpleMindMapNode | null |
     const children = getMindMapChildren(node);
     const uid = typeof node.data?.uid === "string" ? node.data.uid : "";
     const text = readNodeTitle(node, "");
-    parts.push(`${depth}:${uid.length}:${uid}:${text.length}:${text}:${children.length}`);
+    const catalogBoundary = isMindMapCatalogBoundary(node) ? "1" : "0";
+    parts.push(`${depth}:${uid.length}:${uid}:${text.length}:${text}:${catalogBoundary}:${children.length}`);
 
     for (let index = children.length - 1; index >= 0; index -= 1) {
       stack.push({ node: children[index], depth: depth + 1 });
@@ -293,6 +299,20 @@ export function buildMindMapOutline(root: SimpleMindMapNode | null | undefined):
     const children = getMindMapChildren(node);
     const title = readNodeTitle(node);
     const nodeId = typeof node.data?.uid === "string" && node.data.uid ? node.data.uid : createCatalogNodeId(path);
+    const catalogBoundary = isMindMapCatalogBoundary(node);
+    const outlineChildren = catalogBoundary
+      ? []
+      : children.map((child, index) => {
+          const childOrder = index + MIND_MAP_CATALOG_RELATION.firstOrder;
+          return walk(
+            child,
+            level + 1,
+            `${path}${MIND_MAP_CATALOG_RELATION.pathSeparator}${childOrder}`,
+            path,
+            nodeId,
+            childOrder
+          );
+        });
 
     return {
       id: path,
@@ -304,18 +324,10 @@ export function buildMindMapOutline(root: SimpleMindMapNode | null | undefined):
       parentPath,
       order,
       source: MIND_MAP_CATALOG_RELATION.source,
-      childCount: children.length,
-      children: children.map((child, index) => {
-        const childOrder = index + MIND_MAP_CATALOG_RELATION.firstOrder;
-        return walk(
-          child,
-          level + 1,
-          `${path}${MIND_MAP_CATALOG_RELATION.pathSeparator}${childOrder}`,
-          path,
-          nodeId,
-          childOrder
-        );
-      })
+      childCount: outlineChildren.length,
+      hiddenChildCount: catalogBoundary ? children.length : 0,
+      catalogBoundary,
+      children: outlineChildren
     };
   };
 
