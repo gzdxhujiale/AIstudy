@@ -28,6 +28,7 @@ type CatalogRenderOptions = {
   selectedNodeId: string | null;
   collapsedPaths: ReadonlySet<string>;
   branchesOnly: boolean;
+  showLeafItems?: boolean;
   onToggle: (path: string) => void;
   onNodeSelect?: (item: MindMapOutlineItem) => void;
   onNodeContextMenu?: (event: React.MouseEvent<HTMLDivElement>, item: MindMapOutlineItem) => void;
@@ -69,8 +70,12 @@ function getCatalogDepthClass(level: number) {
   return `catalog-node level-${Math.min(Math.max(level, 0), 5)}`;
 }
 
+function isLeafParent(item: MindMapOutlineItem) {
+  return item.children.length > 0 && !item.children.some((child) => child.children.length > 0);
+}
+
 function renderCatalogItems(items: MindMapOutlineItem[], options: CatalogRenderOptions) {
-  const visibleItems = options.branchesOnly ? items.filter((item) => item.children.length > 0) : items;
+  const visibleItems = options.branchesOnly && !options.showLeafItems ? items.filter((item) => item.children.length > 0) : items;
 
   return (
     <ol className="catalog-tree">
@@ -78,6 +83,7 @@ function renderCatalogItems(items: MindMapOutlineItem[], options: CatalogRenderO
         const hasChildren = item.children.length > 0;
         const isCollapsed = hasChildren && options.collapsedPaths.has(item.path);
         const isSelected = Boolean(options.selectedNodeId && item.nodeId === options.selectedNodeId);
+        const showLeafChildren = options.branchesOnly && isLeafParent(item) && !isCollapsed;
 
         return (
           <li key={item.path} className="catalog-tree-item">
@@ -121,7 +127,7 @@ function renderCatalogItems(items: MindMapOutlineItem[], options: CatalogRenderO
               <span className="catalog-node-title">{item.title}</span>
               {item.childCount > 0 ? <span className="catalog-node-count">{item.childCount}</span> : null}
             </div>
-            {hasChildren && !isCollapsed ? renderCatalogItems(item.children, options) : null}
+            {hasChildren && !isCollapsed ? renderCatalogItems(item.children, { ...options, showLeafItems: showLeafChildren }) : null}
           </li>
         );
       })}
