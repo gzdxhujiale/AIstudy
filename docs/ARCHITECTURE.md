@@ -278,7 +278,7 @@ The public version has moved beyond the first milestone. Current shipped surface
 - Textbook assets and notes use DB-first storage with local JSON only as disconnected fallback. Delayed textbook saves retain their original course/mind-map scope before UI reset, so switching scopes does not discard pending PDF state or notes. PDF annotations are DB-owned and pause when the database is unavailable, avoiding a second local annotation source.
 - Chrome fixed-port management currently covers 豆包、ChatGPT、Bilibili、知乎、智联招聘、BOSS 直聘 and 小红书.
 - Chrome fixed-port metadata is DB-first through `chrome_port_states`, while real login cookies stay in per-platform Chrome profiles. Production builds use a stable runtime root outside the app install directory on F drive when available so packaging cleanup or reinstalling does not reset browser login state.
-- Vocabulary capture is a desktop receiver plus Android Accessibility companion APK. The Electron main process listens on port `38673`, filters Baicizhan word-card text, deduplicates accepted words, persists to `vocabulary_capture_documents` and `vocabulary_capture_events`, and uses local pending files only while MySQL is unavailable. The renderer only shows connection state and the filtered word document.
+- Vocabulary capture is a desktop receiver plus Android Accessibility companion APK. The Electron main process listens on port `38673`, filters Baicizhan word-card text, deduplicates accepted words, persists to `vocabulary_capture_documents` and `vocabulary_capture_events`, and uses local pending files only while MySQL is unavailable. The APK sends near-real-time heartbeat payloads with foreground target activity so the renderer can distinguish waiting for the APK, waiting for Baicizhan, and active capture while only showing status plus the filtered word document.
 - Settings contains runtime diagnostics, MCP control, shortcut settings, update management, and user-facing error logs.
 - AI assistant sends prompts through fixed Chrome debugging ports. Chrome discovery accepts registered executables, common install paths, and PATH launchers such as `chrome.cmd` when they point to a real `chrome.exe`; ChatGPT submission prepares the web input, sends through a trusted CDP Enter key event, then reads the reply by conversation order after the current send. Electron main uses Node `ws` with safe Buffer decoding for CDP calls.
 - MCP is a first-class module with renderer UI, Electron controller, external stdio server, HTTP remote access, Tailscale LAN exposure, read/edit tool boundaries, permissions, and call monitoring.
@@ -286,7 +286,7 @@ The public version has moved beyond the first milestone. Current shipped surface
 - App updates preserve runtime data and database configuration. Version updates must not overwrite user courses, mind maps, documents, MCP remote state, or MySQL config.
 - The Windows installer is a slim app package. MySQL and VC++ runtime setup is handled by `build/installer/install-aistudy-mysql-runtime.ps1` during install and may download runtime dependencies on the target machine; dependency setup failure must not block opening the app.
 - The main knowledge workspace has collapsible left knowledge-base pane and right catalog pane. Collapsing side panes must not collapse or zero-width the central mind-map/document canvas.
-- Storage boundaries are declared in `electron/storageBoundary.ts` and checked by `npm run qa:data-boundaries` during build. Knowledge-base recovery rules are checked by `npm run qa:knowledge-reliability`.
+- Storage boundaries are declared in `electron/storageBoundary.ts` and checked by `npm run qa:data-boundaries` during build. Knowledge-base recovery rules are checked by `npm run qa:knowledge-reliability`. Vocabulary capture status and heartbeat contracts are checked by `npm run qa:vocabulary-capture`.
 - ChatGPT/KaTeX/MathML/plain-text math paste normalization lives in `src/renderer/features/mathInput/` and is checked by `npm run qa:math-clipboard` during build.
 - `dist:oneclick` removes runtime data from the installer source and writes `release/build-manifest.json` with version, commit, dirty state, and artifact hashes.
 - Do not re-embed `mysql-8.4.7-winx64.zip` or `vc_redist.x64.exe` into the main NSIS package unless explicitly building a separate offline dependency package.
@@ -334,7 +334,7 @@ src/renderer/features/mcp/
   MCP settings UI, tool toggles, debugging output, LAN access state, permissions and monitor controls.
 
 src/renderer/features/vocabulary/
-  Vocabulary capture page that displays receiver connection state and the filtered vocabulary document.
+  Vocabulary capture page that displays real-time capture state and the filtered vocabulary document.
 
 android/vocabulary-capture/
   Android Accessibility companion APK source and fixed debug APK artifact for Baicizhan vocabulary capture.
@@ -355,6 +355,6 @@ Authorization: Bearer ...
 
 - External MCP calls must be observable when monitoring is enabled.
 - Remote edit access must be permission-gated by capability: course management, mind-map editing, document writing, destructive operations.
-- Build verification is `npm run build`. Data-boundary verification is `npm run qa:data-boundaries`. Knowledge recovery verification is `npm run qa:knowledge-reliability`. Math paste verification is `npm run qa:math-clipboard`. Textbook data-contract verification is `npm run qa:textbook`. Installer verification is `npm run dist:oneclick`.
+- Build verification is `npm run build`. Data-boundary verification is `npm run qa:data-boundaries`. Knowledge recovery verification is `npm run qa:knowledge-reliability`. Vocabulary capture verification is `npm run qa:vocabulary-capture`. Math paste verification is `npm run qa:math-clipboard`. Textbook data-contract verification is `npm run qa:textbook`. Installer verification is `npm run dist:oneclick`.
 - `npm run dist:oneclick` rewrites `docs/updates/INDEX.md`; restore the real release summary after packaging.
 

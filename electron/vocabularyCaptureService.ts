@@ -20,6 +20,10 @@ type VocabularyCapturePayload = {
   source?: unknown;
   appName?: unknown;
   packageName?: unknown;
+  foregroundPackageName?: unknown;
+  targetActive?: unknown;
+  targetLastActiveAt?: unknown;
+  serviceStatus?: unknown;
   text?: unknown;
   nodes?: unknown;
   word?: unknown;
@@ -48,6 +52,10 @@ type VocabularyCaptureMirror = {
   source: string;
   appName: string;
   packageName: string;
+  foregroundPackageName: string;
+  targetActive: boolean;
+  lastTargetActiveAt: string | null;
+  serviceStatus: string;
   updatedAt: string | null;
 };
 
@@ -59,10 +67,15 @@ export type VocabularyCaptureState = {
   };
   connection: {
     status: "connected" | "waiting";
+    targetStatus: "capturing" | "watching" | "waiting";
+    targetActive: boolean;
     lastSeenAt: string | null;
+    lastTargetActiveAt: string | null;
     source: string;
     appName: string;
     packageName: string;
+    foregroundPackageName: string;
+    serviceStatus: string;
   };
   document: {
     text: string;
@@ -89,6 +102,41 @@ function hashText(text: string) {
 
 function normalizeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeBoolean(value: unknown) {
+  if (value === true || value === 1) return true;
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes";
+}
+
+function isBaicizhanPackageName(value: string) {
+  const lower = value.toLowerCase();
+  return lower.includes("jiongji") || lower.includes("baicizhan");
+}
+
+function normalizeEpochMillisToIso(value: unknown) {
+  const millis = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(millis) || millis <= 0) return null;
+  const date = new Date(millis);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+}
+
+function normalizePayloadTargetActive(
+  payload: VocabularyCapturePayload,
+  packageName: string,
+  foregroundPackageName: string,
+  appName: string,
+  text: string
+) {
+  if (typeof payload.targetActive === "boolean" || typeof payload.targetActive === "number" || typeof payload.targetActive === "string") {
+    return normalizeBoolean(payload.targetActive);
+  }
+  return Boolean(text)
+    || isBaicizhanPackageName(packageName)
+    || isBaicizhanPackageName(foregroundPackageName)
+    || appName.includes("\u767e\u8bcd\u65a9");
 }
 
 function normalizeTextBlock(value: string) {
@@ -215,7 +263,7 @@ function normalizePayloadObject(value: unknown): VocabularyCapturePayload {
 
 function readPayloadJson(payload: VocabularyCapturePayload) {
   const output: Record<string, unknown> = {};
-  for (const key of ["source", "appName", "packageName", "word", "capturedAt"]) {
+  for (const key of ["source", "appName", "packageName", "foregroundPackageName", "targetActive", "targetLastActiveAt", "serviceStatus", "word", "capturedAt"]) {
     const value = payload[key as keyof VocabularyCapturePayload];
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
       output[key] = value;
@@ -240,6 +288,10 @@ function createEmptyMirror(): VocabularyCaptureMirror {
     source: "",
     appName: "",
     packageName: "",
+    foregroundPackageName: "",
+    targetActive: false,
+    lastTargetActiveAt: null,
+    serviceStatus: "",
     updatedAt: null
   };
 }
@@ -372,8 +424,12 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
   const pendingPath = () => options.getDataPath("state", "vocabulary-capture-pending-events.json");
 
   function getState(): VocabularyCaptureState {
+    const now = Date.now();
     const connected = mirror.lastSeenAt
-      ? Date.now() - new Date(mirror.lastSeenAt).getTime() <= CONNECTION_TTL_MS
+      ? now - new Date(mirror.lastSeenAt).getTime() <= CONNECTION_TTL_MS
+      : false;
+    const targetActive = connected && mirror.targetActive && mirror.lastTargetActiveAt
+      ? now - new Date(mirror.lastTargetActiveAt).getTime() <= CONNECTION_TTL_MS
       : false;
     return {
       receiver: {
@@ -383,10 +439,15 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
       },
       connection: {
         status: connected ? "connected" : "waiting",
+        targetStatus: !connected ? "waiting" : targetActive ? "capturing" : "watching",
+        targetActive,
         lastSeenAt: mirror.lastSeenAt,
+        lastTargetActiveAt: mirror.lastTargetActiveAt,
         source: mirror.source,
         appName: mirror.appName,
-        packageName: mirror.packageName
+        packageName: mirror.packageName,
+        foregroundPackageName: mirror.foregroundPackageName,
+        serviceStatus: mirror.serviceStatus
       },
       document: {
         text: normalizeVocabularyDocumentForState(mirror.documentText),
@@ -418,6 +479,10 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
       mirror = { ...createEmptyMirror(), ...content };
       mirror.documentText = typeof mirror.documentText === "string" ? mirror.documentText : "";
       mirror.eventCount = Number.isFinite(mirror.eventCount) ? mirror.eventCount : 0;
+      mirror.foregroundPackageName = typeof mirror.foregroundPackageName === "string" ? mirror.foregroundPackageName : "";
+      mirror.targetActive = mirror.targetActive === true;
+      mirror.lastTargetActiveAt = typeof mirror.lastTargetActiveAt === "string" ? mirror.lastTargetActiveAt : null;
+      mirror.serviceStatus = typeof mirror.serviceStatus === "string" ? mirror.serviceStatus : "";
     } catch {
       mirror = createEmptyMirror();
     }
@@ -531,15 +596,22 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
     const source = normalizeString(payload.source) || "aistudy-vocabulary-apk";
     const appName = normalizeString(payload.appName);
     const packageName = normalizeString(payload.packageName);
+    const foregroundPackageName = normalizeString(payload.foregroundPackageName) || packageName;
+    const targetActive = normalizePayloadTargetActive(payload, packageName, foregroundPackageName, appName, text);
+    const targetLastActiveAt = normalizeEpochMillisToIso(payload.targetLastActiveAt) ?? receivedAt;
+    const serviceStatus = normalizeString(payload.serviceStatus) || (targetActive ? "capturing" : "watching");
 
     mirror.lastSeenAt = receivedAt;
     mirror.source = source;
     mirror.appName = appName;
     mirror.packageName = packageName;
+    mirror.foregroundPackageName = foregroundPackageName;
+    mirror.targetActive = targetActive;
+    if (targetActive) mirror.lastTargetActiveAt = targetLastActiveAt;
+    mirror.serviceStatus = serviceStatus;
     mirror.updatedAt = receivedAt;
 
     if (!text) {
-      await writeLocalState();
       broadcastState();
       return { accepted: false, duplicate: false };
     }

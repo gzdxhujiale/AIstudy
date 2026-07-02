@@ -1,6 +1,6 @@
 # Vocabulary Capture Feature
 
-词汇采集模块提供百词斩等 Android 词汇应用的实时单词采集前端。它只展示连接状态和已经筛选、去重后的词汇文档，不展示底层端口、数据库或调试信息。
+词汇采集模块提供百词斩等 Android 词汇应用的实时单词采集前端。它只展示采集状态和已经筛选、去重后的词汇文档，不展示底层端口、数据库或调试信息。
 
 ## Scope
 
@@ -29,7 +29,7 @@
 当前可安装调试 APK 固定放在：
 
 ```text
-android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.4-debug.apk
+android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.5-debug.apk
 ```
 
 构建命令：
@@ -45,6 +45,8 @@ gradle --no-daemon :app:assembleDebug
 
 - `npm run build`
 - `npm run qa:data-boundaries`
+- `npm run qa:vocabulary-capture`
 - `gradle --no-daemon :app:assembleDebug`
-- 打开 AIstudy 的“词汇采集”页面，状态应能在 APK 发送心跳后变为“已连接”。
-- 百词斩新单词应实时追加；选项释义、首页进度和重复单词不应进入文档。
+- 打开 AIstudy 的“词汇采集”页面，未收到 APK 心跳时显示“等待连接”。
+- APK 已授权但百词斩不在前台时显示“等待百词斩”。
+- 百词斩进入前台后应快速显示“采集中”，新单词应实时追加；选项释义、首页进度和重复单词不应进入文档。

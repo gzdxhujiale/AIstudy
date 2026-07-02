@@ -23,7 +23,7 @@ import java.util.concurrent.Executors;
 public class VocabularyAccessibilityService extends AccessibilityService {
     private static final int MAX_NODE_TEXTS = 180;
     private static final int MAX_TEXT_LENGTH = 30000;
-    private static final long HEARTBEAT_MS = 5000L;
+    private static final long HEARTBEAT_MS = 2000L;
     private static final String EVENT_PATH = "/vocabulary-capture/events";
     private static final String HEARTBEAT_PATH = "/vocabulary-capture/heartbeat";
     private static final String[] HOSTS = new String[] {
@@ -40,19 +40,28 @@ public class VocabularyAccessibilityService extends AccessibilityService {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService sender = Executors.newSingleThreadExecutor();
-    private final Runnable captureRunnable = this::captureCurrentWindow;
+    private final Runnable captureRunnable = new Runnable() {
+        @Override
+        public void run() {
+            captureCurrentWindow();
+            sendHeartbeat();
+        }
+    };
     private final Runnable heartbeatRunnable = new Runnable() {
         @Override
         public void run() {
-            sendHeartbeat();
             captureCurrentWindow();
+            sendHeartbeat();
             handler.postDelayed(this, HEARTBEAT_MS);
         }
     };
 
     private String lastHash = "";
     private String lastPackageName = "";
+    private String lastForegroundPackageName = "";
     private String activeHost = "";
+    private boolean lastTargetActive = false;
+    private long lastTargetActiveAt = 0L;
     private long lastPostAt = 0L;
 
     @Override
@@ -67,6 +76,7 @@ public class VocabularyAccessibilityService extends AccessibilityService {
         if (event == null) return;
         CharSequence packageName = event.getPackageName();
         lastPackageName = packageName == null ? lastPackageName : packageName.toString();
+        lastForegroundPackageName = lastPackageName;
         handler.removeCallbacks(captureRunnable);
         handler.postDelayed(captureRunnable, 80L);
     }
@@ -85,15 +95,25 @@ public class VocabularyAccessibilityService extends AccessibilityService {
 
     private void captureCurrentWindow() {
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) return;
+        if (root == null) {
+            lastTargetActive = false;
+            return;
+        }
+
+        CharSequence rootPackageName = root.getPackageName();
+        String currentPackageName = rootPackageName == null ? lastPackageName : rootPackageName.toString();
+        lastPackageName = currentPackageName;
+        lastForegroundPackageName = currentPackageName;
 
         List<String> texts = new ArrayList<>();
         collectText(root, texts, new LinkedHashSet<>());
         root.recycle();
 
         String text = normalizeText(texts);
+        lastTargetActive = isVocabularyWindow(currentPackageName, text);
+        if (lastTargetActive) lastTargetActiveAt = System.currentTimeMillis();
         if (text.isEmpty()) return;
-        if (!isVocabularyWindow(lastPackageName, text)) return;
+        if (!lastTargetActive) return;
 
         String hash = sha256(text);
         long now = System.currentTimeMillis();
@@ -103,7 +123,7 @@ public class VocabularyAccessibilityService extends AccessibilityService {
 
         String word = extractWord(text);
         if (word.isEmpty()) return;
-        String payload = buildPayload(lastPackageName, word, text);
+        String payload = buildPayload(currentPackageName, word, text);
         sender.execute(() -> postPayload(payload, EVENT_PATH));
     }
 
@@ -203,6 +223,10 @@ public class VocabularyAccessibilityService extends AccessibilityService {
             + "\"source\":\"aistudy-vocabulary-apk\","
             + "\"appName\":\"\u767e\u8bcd\u65a9\","
             + "\"packageName\":\"" + jsonEscape(packageName == null ? "" : packageName) + "\","
+            + "\"foregroundPackageName\":\"" + jsonEscape(lastForegroundPackageName) + "\","
+            + "\"targetActive\":" + (lastTargetActive ? "true" : "false") + ","
+            + "\"targetLastActiveAt\":" + Long.toString(lastTargetActiveAt) + ","
+            + "\"serviceStatus\":\"capturing\","
             + "\"word\":\"" + jsonEscape(word) + "\","
             + "\"capturedAt\":\"" + jsonEscape(Instant.now().toString()) + "\","
             + "\"text\":\"" + jsonEscape(text) + "\""
@@ -214,6 +238,10 @@ public class VocabularyAccessibilityService extends AccessibilityService {
             + "\"source\":\"aistudy-vocabulary-apk\","
             + "\"appName\":\"\u767e\u8bcd\u65a9\","
             + "\"packageName\":\"" + jsonEscape(lastPackageName) + "\","
+            + "\"foregroundPackageName\":\"" + jsonEscape(lastForegroundPackageName) + "\","
+            + "\"targetActive\":" + (lastTargetActive ? "true" : "false") + ","
+            + "\"targetLastActiveAt\":" + Long.toString(lastTargetActiveAt) + ","
+            + "\"serviceStatus\":\"" + (lastTargetActive ? "capturing" : "watching") + "\","
             + "\"capturedAt\":\"" + jsonEscape(Instant.now().toString()) + "\""
             + "}";
         sender.execute(() -> postPayload(payload, HEARTBEAT_PATH));

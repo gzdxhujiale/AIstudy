@@ -20,9 +20,10 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "dev:app": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev/run-app.ps1",
-    "build": "node scripts/qa/validate-safe-dependencies.mjs && node scripts/qa/validate-data-boundaries.mjs && node scripts/qa/validate-knowledge-reliability.mjs && node scripts/qa/validate-mindmap-catalog-boundary.mjs && node scripts/qa/validate-math-clipboard.mjs && node scripts/qa/validate-document-clipboard.mjs && tsc && vite build && node scripts/build/prepare-renderer-vendors.mjs && tsc -p tsconfig.electron.json",
+    "build": "node scripts/qa/validate-safe-dependencies.mjs && node scripts/qa/validate-data-boundaries.mjs && node scripts/qa/validate-knowledge-reliability.mjs && node scripts/qa/validate-vocabulary-capture.mjs && node scripts/qa/validate-mindmap-catalog-boundary.mjs && node scripts/qa/validate-math-clipboard.mjs && node scripts/qa/validate-document-clipboard.mjs && tsc && vite build && node scripts/build/prepare-renderer-vendors.mjs && tsc -p tsconfig.electron.json",
     "qa:data-boundaries": "node scripts/qa/validate-data-boundaries.mjs",
     "qa:knowledge-reliability": "node scripts/qa/validate-knowledge-reliability.mjs",
+    "qa:vocabulary-capture": "node scripts/qa/validate-vocabulary-capture.mjs",
     "qa:mindmap-catalog": "node scripts/qa/validate-mindmap-catalog-boundary.mjs",
     "qa:math-clipboard": "node scripts/qa/validate-math-clipboard.mjs",
     "qa:document-clipboard": "node scripts/qa/validate-document-clipboard.mjs",

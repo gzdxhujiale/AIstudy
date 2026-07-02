@@ -8,10 +8,15 @@ type VocabularyCaptureState = {
   };
   connection: {
     status: "connected" | "waiting";
+    targetStatus: "capturing" | "watching" | "waiting";
+    targetActive: boolean;
     lastSeenAt: string | null;
+    lastTargetActiveAt: string | null;
     source: string;
     appName: string;
     packageName: string;
+    foregroundPackageName: string;
+    serviceStatus: string;
   };
   document: {
     text: string;
@@ -38,10 +43,15 @@ const emptyState: VocabularyCaptureState = {
   },
   connection: {
     status: "waiting",
+    targetStatus: "waiting",
+    targetActive: false,
     lastSeenAt: null,
+    lastTargetActiveAt: null,
     source: "",
     appName: "",
-    packageName: ""
+    packageName: "",
+    foregroundPackageName: "",
+    serviceStatus: ""
   },
   document: {
     text: "",
@@ -71,12 +81,14 @@ function normalizeCaptureState(value: unknown): VocabularyCaptureState {
 
 function getStatusText(state: VocabularyCaptureState) {
   if (state.receiver.status === "error") return "异常";
-  return state.connection.status === "connected" ? "已连接" : "等待连接";
+  if (state.connection.status !== "connected") return "等待连接";
+  return state.connection.targetStatus === "capturing" ? "采集中" : "等待百词斩";
 }
 
 function getStatusClass(state: VocabularyCaptureState) {
   if (state.receiver.status === "error") return "error";
-  return state.connection.status;
+  if (state.connection.status !== "connected") return "waiting";
+  return state.connection.targetStatus === "capturing" ? "capturing" : "watching";
 }
 
 export function VocabularyCapturePanel() {

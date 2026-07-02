@@ -20,12 +20,12 @@
 
 - 最新安装包：`release\AIstudy-Setup-0.1.76.exe`
 - 最新免安装运行版：`release\win-unpacked\AIstudy.exe`
-- 最新词汇采集 APK：`android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.4-debug.apk`
+- 最新词汇采集 APK：`android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.5-debug.apk`
 - 最新更新摘要见：`docs/updates/INDEX.md`
 - 当前主要分支：`main`
 - 本轮系统整理开始前，本地 HEAD 与远端 `origin/main` 一致，提交为 `b861d75 test: expand mind map catalog boundary coverage`；`git fetch --prune origin` 后无远端冲突。
 - 当前公开版已经具备课程/分区、思维导图、节点 Word 文档、教材 PDF 与节点笔记、题库考试、信息采集、词汇实时采集、AI 助手、Chrome 固定端口、MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、更新管理、错误日志、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层和右侧文档格式面板。
-- 最近一轮更新集中在词汇采集 Android 伴随 APK、桌面端实时接收器、词汇过滤去重、DB-first 持久化、本地 pending 兜底、主导航词汇采集入口、纯净打包守卫补充、系统旧版本环境整理、APK 产物入库，以及知识库文档/教材重启恢复可靠性收口。
+- 最近一轮更新集中在词汇采集 Android 伴随 APK、桌面端实时接收器、词汇过滤去重、DB-first 持久化、本地 pending 兜底、主导航词汇采集入口、百词斩前台状态实时心跳、纯净打包守卫补充、系统旧版本环境整理、APK 产物入库，以及知识库文档/教材重启恢复可靠性收口。
 
 接手时必须先执行 `git status --short --branch` 判断工作区状态。若已有未提交改动，先确认归属，不要用 `git reset --hard` 或 checkout 回滚用户或其他线程的改动。纯净发行版、数据库自动发现和 StorageProvider 收口都会触碰 `electron/main.ts`、打包脚本和文档，后续接手必须先看真实 diff 再继续。
 
@@ -158,10 +158,10 @@ MySQL tables: vocabulary_capture_documents, vocabulary_capture_events
 Local mirror: AIstudyPublicData/state/vocabulary-capture.json
 Pending file: AIstudyPublicData/state/vocabulary-capture-pending-events.json
 Receiver: http://0.0.0.0:38673/vocabulary-capture/events
-APK: android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.4-debug.apk
+APK: android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.5-debug.apk
 ```
 
-词汇采集由桌面端 `electron/vocabularyCaptureService.ts` 负责筛选、去重、入库和 pending 重放。Android APK 只实时发送百词斩可访问性文本，不保存业务数据。前端 `src/renderer/features/vocabulary/` 只显示连接状态和已经筛选后的词汇文档，不展示调试端口、原始节点树或内部实现说明。
+词汇采集由桌面端 `electron/vocabularyCaptureService.ts` 负责筛选、去重、入库和 pending 重放。Android APK 只实时发送百词斩可访问性文本和前台目标状态，不保存业务数据。前端 `src/renderer/features/vocabulary/` 只显示“等待连接 / 等待百词斩 / 采集中 / 异常”和已经筛选后的词汇文档，不展示调试端口、原始节点树或内部实现说明。
 
 ## 4. 核心架构
 
@@ -497,6 +497,7 @@ npm run dev                 # 原始 Vite + Electron 调试入口
 npm run build               # TypeScript + Vite + Electron 构建
 npm run qa:data-boundaries  # 校验 DB-first、本地缓存、preload 和打包数据边界
 npm run qa:knowledge-reliability # 校验知识库文档/教材重启恢复和 DB-first 可靠性守卫
+npm run qa:vocabulary-capture # 校验词汇采集 APK 心跳、前台状态和前端状态守卫
 npm run qa:math-clipboard   # 校验 ChatGPT/KaTeX/MathML/纯文本数学粘贴解析
 npm run qa:textbook         # 构建并校验教材资产/笔记/PDF 批注数据合同
 npm run qa:error-codes      # 构建并校验错误码体系
@@ -598,7 +599,7 @@ gradle --no-daemon :app:assembleDebug
 构建后将 `android\vocabulary-capture\app\build\outputs\apk\debug\app-debug.apk` 复制到：
 
 ```text
-android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.4-debug.apk
+android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.5-debug.apk
 ```
 
 交付前要确认：
@@ -612,7 +613,7 @@ android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.4-debug.apk
 - 新功能对应模块 README 或主 README 已补。
 - 功能开发内容已同步或准备同步到 `AIstudy 全量功能架构`。
 - 如果打包发布，确认 `release\AIstudy-Setup-当前版本.exe` 与 `release\win-unpacked\AIstudy.exe` 均已更新。
-- 如果涉及词汇采集，确认 `android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.4-debug.apk` 已更新并提交；`android\vocabulary-capture\app\build\` 不应作为源码提交。
+- 如果涉及词汇采集，确认 `android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.5-debug.apk` 已更新并提交；`android\vocabulary-capture\app\build\` 不应作为源码提交。
 - 如果打包发布，先杀死旧实例，打包后打开最新版本实际验证，并确认桌面、开始菜单、固定栏或其他快捷方式指向最新版本。
 - 如果使用 `npm run dist:oneclick`，打包后检查并恢复 `docs/updates/INDEX.md` 的真实更新摘要。
 - 发布前建议运行 `npm run github:sync:doctor`，确认 origin、upstream、ahead/behind、工作区、GitHub CLI 登录和 latest release 安装包资产状态。
@@ -625,7 +626,7 @@ android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.4-debug.apk
 
 ## 11. 最近版本记录
 
-- `0.1.76`：接入 AIstudy 管理 MySQL 自动发现和短启动，安装器 MySQL 配置改为 UTF-8 无 BOM 写入，修复重复安装时 `[mysqld]`/`[client]` 多端口解析导致的参数转换失败，并为 `dist:oneclick` 增加纯净安装源运行数据守卫；补充教材 PDF 批注 DB-owned 服务拆分、`storageBoundary` 数据边界清单、数学粘贴共享解析模块、`qa:data-boundaries`、`qa:math-clipboard`、`qa:textbook` 和 `release/build-manifest.json`；新增词汇采集桌面接收器、Android Accessibility 伴随 APK、DB-first 词汇文档、断连 pending 重放、词汇去重和主导航入口；修复节点文档成功读库为空时回放旧本地镜像、教材作用域切换丢弃延迟保存的问题，并新增 `qa:knowledge-reliability`；清理旧 `0.1.68`-`0.1.75` 安装包到 F 盘隔离区并移除已失效的旧内测版快捷方式/卸载注册表残留。
+- `0.1.76`：接入 AIstudy 管理 MySQL 自动发现和短启动，安装器 MySQL 配置改为 UTF-8 无 BOM 写入，修复重复安装时 `[mysqld]`/`[client]` 多端口解析导致的参数转换失败，并为 `dist:oneclick` 增加纯净安装源运行数据守卫；补充教材 PDF 批注 DB-owned 服务拆分、`storageBoundary` 数据边界清单、数学粘贴共享解析模块、`qa:data-boundaries`、`qa:math-clipboard`、`qa:textbook` 和 `release/build-manifest.json`；新增词汇采集桌面接收器、Android Accessibility 伴随 APK、DB-first 词汇文档、断连 pending 重放、词汇去重、百词斩前台状态实时心跳和主导航入口；修复节点文档成功读库为空时回放旧本地镜像、教材作用域切换丢弃延迟保存的问题，并新增 `qa:knowledge-reliability` 与 `qa:vocabulary-capture`；清理旧 `0.1.68`-`0.1.75` 安装包到 F 盘隔离区并移除已失效的旧内测版快捷方式/卸载注册表残留。
 - `0.1.75`：纯净公开版默认隔离本机数据目录，并在未显式配置 MySQL 时避免读取本机旧数据库内容。
 - `0.1.74`：修复教材节点页段绑定状态隔离、已绑定锁定/取消重设，并清理教材 PDF 独立窗口残留。
 - `0.1.73`：修复教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化问题，并优化文档内 AI 小窗拖动体验。
@@ -752,6 +753,7 @@ android/vocabulary-capture/
 - `electron/main.ts` 仍承载大量业务服务逻辑，但教材 PDF 批注已经抽到 `electron/textbookAnnotationService.ts`。继续扩展考试、教材、采集或 MCP 时，优先抽到独立 main-side service 文件，再通过 preload 暴露，不要继续扩大主进程巨文件。
 - DB-first 数据边界已新增 `electron/storageBoundary.ts`，`npm run build` 会先跑 `qa:data-boundaries`；后续新增本地缓存、preload 能力或打包运行数据时要同步更新该清单和 QA 守卫。
 - 词汇采集已新增 `src/renderer/features/vocabulary/README.md` 和 `android/vocabulary-capture/README.md`。后续改采集筛选、端口、APK 包名、授权方式、MySQL 表或 pending 文件时必须同步这两个 README、`docs/ARCHITECTURE.md` 和本接手文档。
+- 词汇采集实时状态新增 `npm run qa:vocabulary-capture` 守卫；涉及 APK 心跳、百词斩前台状态、桌面接收器状态或前端状态文本时必须运行。
 - ChatGPT/KaTeX/MathML/纯文本数学粘贴已抽到 `src/renderer/features/mathInput/`，`npm run build` 会先跑 `qa:math-clipboard`；后续改教材或节点文档粘贴逻辑时不要在业务组件内另起一套符号替换。
 - 教材资产、节点笔记和 PDF 批注新增 `npm run qa:textbook` 回归脚本；涉及教材页段绑定、笔记规范化、批注坐标/颜色/数据库归属时必须运行。
 - 知识库文档本地镜像和教材延迟保存新增 `npm run qa:knowledge-reliability` 守卫；涉及 DB-first 恢复、重启状态、切换课程/导图保存时必须运行。
@@ -776,7 +778,7 @@ android/vocabulary-capture/
 - 本次任务目标、禁止改动范围、已有未提交改动归属。
 - 全量遍历要求：新线程必须先用 VS Code 打开项目，并对 `F:\XIANGMU\AIstudy-public` 整个文件夹做 1-3 轮全量遍历；至少用 `rg --files` 或等效方式扫过 docs、scripts、electron、src/renderer/features、release、配置和关键入口，达到能直接开发和判断风险的程度后再进入具体任务。
 - 必读文件：本文件、`README.md`、`docs/README.md`、`docs/ARCHITECTURE.md`、`docs/功能规划/README.md`、目标模块 README、相关主进程/preload/renderer 入口。
-- 必跑验证：按任务选择 `npm run setup:doctor`、`npm run build`、`npm run qa:error-codes`、`npm run dist:oneclick`、`npm run github:sync:doctor`。
+- 必跑验证：按任务选择 `npm run setup:doctor`、`npm run build`、`npm run qa:vocabulary-capture`、`npm run qa:error-codes`、`npm run dist:oneclick`、`npm run github:sync:doctor`。
 - 开发权限边界：开发线程除 Codex 全局记忆和当次任务明确要求外，不做额外权限限制；可以根据任务需要完成开发、验证、文档同步、脚本维护、打包、提交、推送或发布准备。
 
 新线程接手前必须先读本文件并完成全项目遍历，不要凭旧记忆或局部 diff 改代码；功能开发完成后，如果架构、数据边界、发布流程、VS Code 接管方式或模块 README 发生变化，要先更新本文件，再交付。

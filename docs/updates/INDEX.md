@@ -5,13 +5,22 @@
 ## 最新版本
 
 - 版本号：0.1.76
-- 更新时间：2026-07-02 18:04:04
-- 功能更新：优化知识库节点文档和教材 PDF/笔记的 DB-first 重启恢复；新增知识库可靠性 QA 守卫；保留词汇采集 APK 与系统文档整理记录
+- 更新时间：2026-07-02 19:09:04
+- 功能更新：词汇采集跟随百词斩前台状态实时刷新；新版 Android APK 0.1.5 增加目标应用心跳；新增词汇采集 QA 守卫
 - GitHub：https://github.com/SnowLove0303/AIstudy-Public.git
 - 分支：main
 - 提交：本次推送后以 GitHub main 为准
 
 ## 更新记录
+
+### 0.1.76 - 2026-07-02 19:09:04
+
+- 词汇采集跟随百词斩前台状态实时刷新
+- 新版 Android APK 0.1.5 增加目标应用心跳
+- 新增词汇采集 QA 守卫
+- GitHub：https://github.com/SnowLove0303/AIstudy-Public.git
+- 分支：main
+- 提交：本次推送后以 GitHub main 为准
 
 ### 0.1.76 - 2026-07-02 18:04:04
 
