@@ -9722,6 +9722,8 @@ ipcMain.handle("mcp:remote-copy", withUserFacingError("mcp:remote-copy", "内网
 
 ipcMain.handle("vocabulary-capture:state", withUserFacingError("vocabulary-capture:state", "词汇采集状态暂时无法读取。", () => vocabularyCaptureService.getState()));
 
+ipcMain.handle("vocabulary-capture:save-document", withUserFacingError("vocabulary-capture:save-document", "词汇文档没有保存，请稍后再试。", (_event, text) => vocabularyCaptureService.saveDocumentText(text)));
+
 ipcMain.handle("chrome-ports:status", withUserFacingError("chrome-ports:status", "端口状态读取没有完成，请稍后再试。", () => getChromePortStatuses()));
 
 ipcMain.handle("chrome-ports:open-login", withUserFacingError("chrome-ports:open-login", "登录窗口没有打开，请稍后再试。", (_event, platformId) => openChromePortLogin(platformId)));

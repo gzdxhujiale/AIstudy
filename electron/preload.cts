@@ -129,6 +129,7 @@ contextBridge.exposeInMainWorld("aistudyChromePorts", {
 
 contextBridge.exposeInMainWorld("aistudyVocabularyCapture", {
   state: () => invokeApp("vocabulary-capture:state"),
+  saveDocument: (text: unknown) => invokeApp("vocabulary-capture:save-document", text),
   onStateChanged: (callback: (state: unknown) => void) => {
     const listener = (_event: IpcRendererEvent, state: unknown) => callback(state);
     ipcRenderer.on("vocabulary-capture:state-changed", listener);

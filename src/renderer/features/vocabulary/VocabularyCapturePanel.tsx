@@ -30,6 +30,7 @@ declare global {
   interface Window {
     aistudyVocabularyCapture?: {
       state: () => Promise<VocabularyCaptureState>;
+      saveDocument: (text: string) => Promise<VocabularyCaptureState>;
       onStateChanged: (callback: (state: VocabularyCaptureState) => void) => () => void;
     };
   }
@@ -95,31 +96,67 @@ function getStatusClass(state: VocabularyCaptureState) {
 
 export function VocabularyCapturePanel() {
   const [state, setState] = React.useState<VocabularyCaptureState>(emptyState);
+  const [documentText, setDocumentText] = React.useState("");
   const documentRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const dirtyDocumentRef = React.useRef(false);
+  const saveTimerRef = React.useRef<number | null>(null);
+
+  const applyState = React.useCallback((nextState: VocabularyCaptureState) => {
+    setState(nextState);
+    if (!dirtyDocumentRef.current) {
+      setDocumentText(nextState.document.text);
+    }
+  }, []);
+
+  const queueDocumentSave = React.useCallback((text: string) => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      void window.aistudyVocabularyCapture?.saveDocument(text)
+        .then((nextState) => {
+          dirtyDocumentRef.current = false;
+          applyState(normalizeCaptureState(nextState));
+        })
+        .catch(() => undefined);
+    }, 500);
+  }, [applyState]);
 
   React.useEffect(() => {
     let cancelled = false;
     void window.aistudyVocabularyCapture?.state()
       .then((nextState) => {
-        if (!cancelled) setState(normalizeCaptureState(nextState));
+        if (!cancelled) applyState(normalizeCaptureState(nextState));
       })
       .catch(() => undefined);
 
     const unsubscribe = window.aistudyVocabularyCapture?.onStateChanged((nextState) => {
-      setState(normalizeCaptureState(nextState));
+      applyState(normalizeCaptureState(nextState));
     });
 
     return () => {
       cancelled = true;
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
       unsubscribe?.();
     };
-  }, []);
+  }, [applyState]);
 
   React.useEffect(() => {
     const element = documentRef.current;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
-  }, [state.document.text]);
+  }, [documentText]);
+
+  function handleDocumentChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
+    const nextText = event.currentTarget.value;
+    dirtyDocumentRef.current = true;
+    setDocumentText(nextText);
+    queueDocumentSave(nextText);
+  }
 
   return (
     <main className="vocabulary-capture-page">
@@ -131,7 +168,7 @@ export function VocabularyCapturePanel() {
         </div>
       </header>
       <section className="vocabulary-capture-document" aria-label="词汇采集文档">
-        <textarea ref={documentRef} value={state.document.text} readOnly spellCheck={false} />
+        <textarea ref={documentRef} value={documentText} onChange={handleDocumentChange} spellCheck={false} />
       </section>
     </main>
   );

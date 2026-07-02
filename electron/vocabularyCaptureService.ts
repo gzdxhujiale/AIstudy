@@ -6,8 +6,9 @@ import path from "node:path";
 import type { Pool } from "mysql2/promise";
 
 const DEFAULT_CAPTURE_PORT = 38673;
-const CONNECTION_TTL_MS = 15000;
-const COMPANION_LAUNCH_INTERVAL_MS = 30000;
+const CONNECTION_TTL_MS = 45000;
+const COMPANION_LAUNCH_INTERVAL_MS = 15000;
+const HEARTBEAT_LOCAL_WRITE_INTERVAL_MS = 15000;
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_CAPTURE_TEXT_CHARS = 30000;
 const MAX_DOCUMENT_TEXT_CHARS = 1_000_000;
@@ -306,7 +307,7 @@ function trimDocumentText(text: string) {
 }
 
 function appendDocumentBlock(currentText: string, nextBlock: string) {
-  const merged = currentText ? `${currentText}\n\n${nextBlock}` : nextBlock;
+  const merged = currentText ? `${currentText.trimEnd()}\n${nextBlock}` : nextBlock;
   return trimDocumentText(merged);
 }
 
@@ -335,6 +336,32 @@ function normalizeVocabularyDocumentForState(text: string) {
       return true;
     });
   return words.join("\n");
+}
+
+function normalizeEditableVocabularyDocument(text: string) {
+  const seen = new Set<string>();
+  const normalizedWords = readVocabularyDocumentWords(text)
+    .filter((word) => {
+      const key = word.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+  if (normalizedWords.length > 0) return normalizedWords.join("\n");
+
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.trim().toLowerCase())
+    .filter((line) => isWordCandidate(line) && !BLOCKED_WORD_CANDIDATES.has(line))
+    .filter((word) => {
+      if (seen.has(word)) return false;
+      seen.add(word);
+      return true;
+    })
+    .join("\n");
 }
 
 function hasVocabularyWord(text: string, word: string) {
@@ -422,6 +449,7 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
   let flushPromise: Promise<void> | null = null;
   let tickTimer: NodeJS.Timeout | null = null;
   let lastCompanionLaunchAt = 0;
+  let lastHeartbeatLocalWriteAt = 0;
 
   const mirrorPath = () => options.getDataPath("state", "vocabulary-capture.json");
   const pendingPath = () => options.getDataPath("state", "vocabulary-capture-pending-events.json");
@@ -482,6 +510,14 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
     await fs.mkdir(path.dirname(mirrorPath()), { recursive: true });
     await fs.writeFile(mirrorPath(), JSON.stringify(mirror, null, 2), "utf8");
     await fs.writeFile(pendingPath(), JSON.stringify(pendingEvents, null, 2), "utf8");
+  }
+
+  async function writeHeartbeatStateIfDue(receivedAt: string) {
+    const receivedAtTime = new Date(receivedAt).getTime();
+    const now = Number.isFinite(receivedAtTime) ? receivedAtTime : Date.now();
+    if (now - lastHeartbeatLocalWriteAt < HEARTBEAT_LOCAL_WRITE_INTERVAL_MS) return;
+    lastHeartbeatLocalWriteAt = now;
+    await writeLocalState();
   }
 
   async function loadLocalState() {
@@ -623,6 +659,7 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
     mirror.updatedAt = receivedAt;
 
     if (!text) {
+      await writeHeartbeatStateIfDue(receivedAt);
       broadcastState();
       return { accepted: false, duplicate: false };
     }
@@ -665,6 +702,29 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
     await persistAcceptedEvent(event);
     broadcastState();
     return { accepted: true, duplicate: false };
+  }
+
+  async function saveDocumentText(rawText: unknown) {
+    const nextText = normalizeEditableVocabularyDocument(normalizeString(rawText));
+    const words = readVocabularyDocumentWords(nextText);
+    const updatedAt = nowIso();
+    mirror.documentText = trimDocumentText(nextText);
+    mirror.eventCount = words.length;
+    mirror.lastTextHash = words.length > 0 ? hashText(words[words.length - 1]) : "";
+    mirror.updatedAt = updatedAt;
+
+    try {
+      const runtime = await options.getMysqlRuntime();
+      await ensureVocabularyCaptureTables(runtime.pool);
+      await persistMirrorToMysql(runtime.pool);
+    } catch {
+      // The local mirror remains the fallback source until MySQL is available again.
+    } finally {
+      await writeLocalState();
+      broadcastState();
+    }
+
+    return getState();
   }
 
   function shouldLaunchCompanionApp() {
@@ -736,6 +796,7 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
       }
       started = false;
     },
-    getState
+    getState,
+    saveDocumentText
   };
 }
