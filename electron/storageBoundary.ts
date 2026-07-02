@@ -93,6 +93,16 @@ export const STORAGE_BOUNDARY_MODULES: StorageBoundaryModule[] = [
     notes: "用户可读错误归数据库日志；技术细节不进入产品页面。"
   },
   {
+    id: "vocabulary-capture",
+    name: "词汇实时采集",
+    mode: "db-first",
+    owner: "main",
+    mysqlTables: ["vocabulary_capture_documents", "vocabulary_capture_events"],
+    cacheFiles: ["AIstudyPublicData/state/vocabulary-capture.json"],
+    pendingFiles: ["AIstudyPublicData/state/vocabulary-capture-pending-events.json"],
+    notes: "词汇采集文档和事件优先写入数据库；本地 JSON 只用于断连兜底和恢复后重放。"
+  },
+  {
     id: "ui-preferences",
     name: "界面偏好",
     mode: "local-preference",

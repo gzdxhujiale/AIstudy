@@ -127,6 +127,17 @@ contextBridge.exposeInMainWorld("aistudyChromePorts", {
   openPage: (input: unknown) => invokeApp("chrome-ports:open-page", input)
 });
 
+contextBridge.exposeInMainWorld("aistudyVocabularyCapture", {
+  state: () => invokeApp("vocabulary-capture:state"),
+  onStateChanged: (callback: (state: unknown) => void) => {
+    const listener = (_event: IpcRendererEvent, state: unknown) => callback(state);
+    ipcRenderer.on("vocabulary-capture:state-changed", listener);
+    return () => {
+      ipcRenderer.off("vocabulary-capture:state-changed", listener);
+    };
+  }
+});
+
 contextBridge.exposeInMainWorld("aistudyInformationCollection", {
   collectBilibili: (input: unknown) => invokeApp("information-collection:bilibili-collect", input),
   processBilibili: (input: unknown) => invokeApp("information-collection:bilibili-process", input),

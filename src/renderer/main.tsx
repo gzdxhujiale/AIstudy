@@ -55,6 +55,7 @@ import {
 } from "./features/mindmap/MindMapWorkspace";
 import type { MindMapOutlineItem, MindMapSelectedNode } from "./features/mindmap/mindMapTypes";
 import { TextbookPdfWindow } from "./features/textbook/TextbookPdfWindow";
+import { VocabularyCapturePanel } from "./features/vocabulary/VocabularyCapturePanel";
 import { startCoreFeatureWarmup } from "./lib/performanceWarmup";
 import { drainBeforeCloseSaves } from "./lib/saveDrain";
 import "./styles.css";
@@ -199,7 +200,7 @@ class AppErrorBoundary extends React.Component<React.PropsWithChildren, AppError
 }
 
 type CourseDialogMode = "create" | "edit";
-type AppSection = "knowledge" | "collection" | "exam" | "assistant" | "chromePorts";
+type AppSection = "knowledge" | "collection" | "exam" | "assistant" | "chromePorts" | "vocabulary";
 type DetailPaneMode = "catalog" | "format";
 type SettingsPage = "runtime" | "mcp" | "shortcuts" | "updates" | "errorLogs";
 
@@ -1251,6 +1252,16 @@ function App() {
             <ClipboardList size={19} strokeWidth={1.9} />
           </button>
           <button
+            className={activeSection === "vocabulary" ? "nav-button active" : "nav-button"}
+            title="词汇采集"
+            aria-label="词汇采集"
+            aria-current={activeSection === "vocabulary" ? "page" : undefined}
+            type="button"
+            onClick={() => setActiveSection("vocabulary")}
+          >
+            <BookOpen size={19} strokeWidth={1.9} />
+          </button>
+          <button
             className={activeSection === "exam" ? "nav-button active" : "nav-button"}
             title="考试"
             aria-label="考试"
@@ -1463,6 +1474,8 @@ function App() {
         />
       ) : activeSection === "collection" ? (
         <InformationCollectionPanel courses={courses} activeCourseId={activeCourseId} />
+      ) : activeSection === "vocabulary" ? (
+        <VocabularyCapturePanel />
       ) : activeSection === "exam" ? (
         <ExamWorkspace
           activeCourseId={activeCourseId}

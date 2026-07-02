@@ -16,21 +16,22 @@
 
 ## 1.1 当前接手状态
 
-截至 2026-06-29，本公开版已从 MCP/知识库主链路扩展到教材、考试和信息采集的完整应用壳：
+截至 2026-07-02，本公开版已从 MCP/知识库主链路扩展到教材、考试、信息采集和词汇采集的完整应用壳：
 
 - 最新安装包：`release\AIstudy-Setup-0.1.76.exe`
 - 最新免安装运行版：`release\win-unpacked\AIstudy.exe`
+- 最新词汇采集 APK：`android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.4-debug.apk`
 - 最新更新摘要见：`docs/updates/INDEX.md`
 - 当前主要分支：`main`
-- 本轮 StorageProvider 收口开始前，本地 HEAD 与远端 `origin/main` 一致，提交为 `ecc9ff3 fix: harden public installer mysql runtime`；`git rev-list --left-right --count "HEAD...@{u}"` 为 `0 0`。
-- 当前公开版已经具备课程/分区、思维导图、节点 Word 文档、教材 PDF 与节点笔记、题库考试、信息采集、AI 助手、Chrome 固定端口、MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、更新管理、错误日志、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层和右侧文档格式面板。
-- 最近一轮更新集中在纯净公开版默认隔离本机数据目录、AIstudy 管理 MySQL 自动发现、打包源运行数据排除守卫、重复安装时 MySQL 端口解析幂等修复、未连接数据库时的课程侧栏状态提示，以及课程/分区/教材向 DB-first StorageProvider 的首轮收口。
+- 本轮系统整理开始前，本地 HEAD 与远端 `origin/main` 一致，提交为 `b861d75 test: expand mind map catalog boundary coverage`；`git fetch --prune origin` 后无远端冲突。
+- 当前公开版已经具备课程/分区、思维导图、节点 Word 文档、教材 PDF 与节点笔记、题库考试、信息采集、词汇实时采集、AI 助手、Chrome 固定端口、MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、更新管理、错误日志、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层和右侧文档格式面板。
+- 最近一轮更新集中在词汇采集 Android 伴随 APK、桌面端实时接收器、词汇过滤去重、DB-first 持久化、本地 pending 兜底、主导航词汇采集入口、纯净打包守卫补充、系统旧版本环境整理和 APK 产物入库。
 
 接手时必须先执行 `git status --short --branch` 判断工作区状态。若已有未提交改动，先确认归属，不要用 `git reset --hard` 或 checkout 回滚用户或其他线程的改动。纯净发行版、数据库自动发现和 StorageProvider 收口都会触碰 `electron/main.ts`、打包脚本和文档，后续接手必须先看真实 diff 再继续。
 
-本轮功能遍历确认的主功能目录为 `assistant`、`chromePorts`、`collection`、`course`、`documents`、`exam`、`importer`、`mcp`、`mindmap`、`textbook`。其中 `textbook` 已真实接入主界面、preload、主进程、MySQL 和本地兜底，并已补齐模块 README。
+本轮功能遍历确认的主功能目录为 `assistant`、`chromePorts`、`collection`、`course`、`documents`、`exam`、`importer`、`mcp`、`mindmap`、`textbook`、`vocabulary`。其中 `textbook` 和 `vocabulary` 已真实接入主界面、preload、主进程、MySQL 和本地兜底，并已补齐模块 README。
 
-当前应用壳不是多页面路由，而是 `src/renderer/main.tsx` 的单壳多功能区：左侧主导航切换知识库、采集、考试、Chrome 端口和 AI 助手；知识库内部再切换导图、文档、教材；`?view=textbook-pdf` 是教材 PDF 独立窗口的特殊入口。关闭主窗口前会通过 `aistudyLifecycle.onBeforeClose` 统一 drain 导图、文档和教材笔记保存任务；MCP 外部数据变更会触发课程重读和导图/文档刷新修订号。
+当前应用壳不是多页面路由，而是 `src/renderer/main.tsx` 的单壳多功能区：左侧主导航切换知识库、信息采集、词汇采集、考试、Chrome 端口和 AI 助手；知识库内部再切换导图、文档、教材；`?view=textbook-pdf` 是教材 PDF 独立窗口的特殊入口。关闭主窗口前会通过 `aistudyLifecycle.onBeforeClose` 统一 drain 导图、文档和教材笔记保存任务；MCP 外部数据变更会触发课程重读和导图/文档刷新修订号。
 
 接手时先注意：以 `git status --short --branch` 为准判断工作区状态；如果已有未提交改动，不要用 `git reset --hard` 或 checkout 回滚用户改动。
 
@@ -150,6 +151,18 @@ MySQL 配置优先级从低到高是 AIstudy 管理服务 `%ProgramData%\AIstudy
 
 DB-first StorageProvider 基线：知识库相关模块必须以数据库为正式事实源，`electron/storageProvider.ts` 只允许把本地 JSON 作为断连兜底缓存。模块接入时要声明并接入同一套能力：自动发现 MySQL 配置或 AIstudy 管理服务、自动连接固定 `aistudy_public`、自动初始化缺失数据表、数据库读写、缓存回写、断连 pending/dirty 标记、恢复后重放或提拔缓存。数据库读取成功后必须刷新本地缓存，包括空数据库结果，避免旧 JSON 在纯净安装或重连后成为第二套事实源。后续课程、导图、文档、教材、考试和资产继续拆模块时，不要让每个模块私自实现一套连接、建表、兜底和同步逻辑。
 
+词汇采集数据边界：
+
+```text
+MySQL tables: vocabulary_capture_documents, vocabulary_capture_events
+Local mirror: AIstudyPublicData/state/vocabulary-capture.json
+Pending file: AIstudyPublicData/state/vocabulary-capture-pending-events.json
+Receiver: http://0.0.0.0:38673/vocabulary-capture/events
+APK: android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.4-debug.apk
+```
+
+词汇采集由桌面端 `electron/vocabularyCaptureService.ts` 负责筛选、去重、入库和 pending 重放。Android APK 只实时发送百词斩可访问性文本，不保存业务数据。前端 `src/renderer/features/vocabulary/` 只显示连接状态和已经筛选后的词汇文档，不展示调试端口、原始节点树或内部实现说明。
+
 ## 4. 核心架构
 
 技术栈：
@@ -177,6 +190,8 @@ src/renderer/domain/coreContracts.ts
 electron/documentExport.ts
 electron/examStore.ts
 electron/textbookStore.ts
+electron/vocabularyCaptureService.ts
+android/vocabulary-capture
 ```
 
 核心设计基线见：
@@ -197,6 +212,7 @@ src/renderer/features/mindmap       思维导图
 src/renderer/features/documents     Word 文档
 src/renderer/features/importer      导入器 UI 与解析
 src/renderer/features/textbook      教材 PDF、节点笔记、教材窗口
+src/renderer/features/vocabulary    词汇实时采集前端
 src/renderer/features/exam          题库、试卷、考试、成绩
 src/renderer/features/collection    信息采集
 src/renderer/features/assistant     AI 助手
@@ -569,6 +585,19 @@ npm run audit:docx-import
 npm run dist:oneclick
 ```
 
+涉及词汇采集 Android APK：
+
+```powershell
+$env:GRADLE_USER_HOME='F:\AIAPP\Codex\gradle-home'
+gradle --no-daemon :app:assembleDebug
+```
+
+构建后将 `android\vocabulary-capture\app\build\outputs\apk\debug\app-debug.apk` 复制到：
+
+```text
+android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.4-debug.apk
+```
+
 交付前要确认：
 
 - 只改公开版。
@@ -580,6 +609,7 @@ npm run dist:oneclick
 - 新功能对应模块 README 或主 README 已补。
 - 功能开发内容已同步或准备同步到 `AIstudy 全量功能架构`。
 - 如果打包发布，确认 `release\AIstudy-Setup-当前版本.exe` 与 `release\win-unpacked\AIstudy.exe` 均已更新。
+- 如果涉及词汇采集，确认 `android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.4-debug.apk` 已更新并提交；`android\vocabulary-capture\app\build\` 不应作为源码提交。
 - 如果打包发布，先杀死旧实例，打包后打开最新版本实际验证，并确认桌面、开始菜单、固定栏或其他快捷方式指向最新版本。
 - 如果使用 `npm run dist:oneclick`，打包后检查并恢复 `docs/updates/INDEX.md` 的真实更新摘要。
 - 发布前建议运行 `npm run github:sync:doctor`，确认 origin、upstream、ahead/behind、工作区、GitHub CLI 登录和 latest release 安装包资产状态。
@@ -592,7 +622,7 @@ npm run dist:oneclick
 
 ## 11. 最近版本记录
 
-- `0.1.76`：接入 AIstudy 管理 MySQL 自动发现和短启动，安装器 MySQL 配置改为 UTF-8 无 BOM 写入，修复重复安装时 `[mysqld]`/`[client]` 多端口解析导致的参数转换失败，并为 `dist:oneclick` 增加纯净安装源运行数据守卫；后续补充教材 PDF 批注 DB-owned 服务拆分、`storageBoundary` 数据边界清单、数学粘贴共享解析模块、`qa:data-boundaries`、`qa:math-clipboard`、`qa:textbook` 和 `release/build-manifest.json`。
+- `0.1.76`：接入 AIstudy 管理 MySQL 自动发现和短启动，安装器 MySQL 配置改为 UTF-8 无 BOM 写入，修复重复安装时 `[mysqld]`/`[client]` 多端口解析导致的参数转换失败，并为 `dist:oneclick` 增加纯净安装源运行数据守卫；补充教材 PDF 批注 DB-owned 服务拆分、`storageBoundary` 数据边界清单、数学粘贴共享解析模块、`qa:data-boundaries`、`qa:math-clipboard`、`qa:textbook` 和 `release/build-manifest.json`；新增词汇采集桌面接收器、Android Accessibility 伴随 APK、DB-first 词汇文档、断连 pending 重放、词汇去重和主导航入口；清理旧 `0.1.68`-`0.1.75` 安装包到 F 盘隔离区并移除已失效的旧内测版快捷方式/卸载注册表残留。
 - `0.1.75`：纯净公开版默认隔离本机数据目录，并在未显式配置 MySQL 时避免读取本机旧数据库内容。
 - `0.1.74`：修复教材节点页段绑定状态隔离、已绑定锁定/取消重设，并清理教材 PDF 独立窗口残留。
 - `0.1.73`：修复教材资产与节点笔记按课程和导图作用域读取保存、教材页段绑定切换和持久化问题，并优化文档内 AI 小窗拖动体验。
@@ -667,6 +697,9 @@ src/renderer/features/exam/
 src/renderer/features/collection/
   信息采集页面，当前重点是 Bilibili 视频定位、字幕/转写和写入知识文档。
 
+src/renderer/features/vocabulary/
+  词汇采集页面，只展示连接状态和筛选去重后的词汇文档。
+
 src/renderer/features/assistant/
   AI 助手页面和文档内紧凑面板，本地保存最近对话，发送由主进程固定端口自动化完成。
 
@@ -697,8 +730,14 @@ electron/examStore.ts
 electron/textbookStore.ts
   教材资产、节点教材笔记、PDF 资产记录和 MySQL/本地兜底读写。
 
+electron/vocabularyCaptureService.ts
+  词汇采集 HTTP 接收器、百词斩文本筛选、词汇去重、MySQL 入库和本地 pending 重放。
+
 electron/main.ts
   MySQL、课程/导图/文档/考试/教材 IPC、MCP 工具接入、Chrome 端口、信息采集、AI 助手、更新、错误日志。
+
+android/vocabulary-capture/
+  词汇采集 Android 伴随 APK 源码和固定提交 APK 产物。
 ```
 
 ## 13. 当前查漏结果
@@ -709,10 +748,12 @@ electron/main.ts
 - `docs/ARCHITECTURE.md` 的 “Current Implemented Surfaces” 已同步到 `0.1.76`，并补充教材、DB-first 边界、QA 和打包 manifest 规则。
 - `electron/main.ts` 仍承载大量业务服务逻辑，但教材 PDF 批注已经抽到 `electron/textbookAnnotationService.ts`。继续扩展考试、教材、采集或 MCP 时，优先抽到独立 main-side service 文件，再通过 preload 暴露，不要继续扩大主进程巨文件。
 - DB-first 数据边界已新增 `electron/storageBoundary.ts`，`npm run build` 会先跑 `qa:data-boundaries`；后续新增本地缓存、preload 能力或打包运行数据时要同步更新该清单和 QA 守卫。
+- 词汇采集已新增 `src/renderer/features/vocabulary/README.md` 和 `android/vocabulary-capture/README.md`。后续改采集筛选、端口、APK 包名、授权方式、MySQL 表或 pending 文件时必须同步这两个 README、`docs/ARCHITECTURE.md` 和本接手文档。
 - ChatGPT/KaTeX/MathML/纯文本数学粘贴已抽到 `src/renderer/features/mathInput/`，`npm run build` 会先跑 `qa:math-clipboard`；后续改教材或节点文档粘贴逻辑时不要在业务组件内另起一套符号替换。
 - 教材资产、节点笔记和 PDF 批注新增 `npm run qa:textbook` 回归脚本；涉及教材页段绑定、笔记规范化、批注坐标/颜色/数据库归属时必须运行。
 - 本轮检索了 `TODO/FIXME/placeholder/mock/sample/lorem/测试/占位/假/dummy/fake`。新增可疑业务假入口未发现；命中主要是历史研究文档里的 fixture/sample 计划、CSS/输入框 placeholder、导入报告 `sample` 字段，以及考试政治真题种子入口。后续如果改 UI，应继续遵守“不展示未接入真实能力的入口”。
 - 当前工作区已有用户/历史改动，交接者在任何提交、打包或发布前必须重新跑 `git status --short --branch` 并确认改动归属。
+- 2026-07-02 环境整理后，`release` 下旧 `AIstudy-Setup-0.1.68` 到 `0.1.75` 安装包已移入 `F:\AIAPP\Codex\cleanup-quarantine\AIstudy-public-20260702-1708`；当前桌面主版本只保留 `0.1.76`。该隔离区是回滚点，不属于仓库源码。
 
 ## 14. 新线程培训与交接规则
 

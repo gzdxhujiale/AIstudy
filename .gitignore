@@ -1,5 +1,8 @@
 node_modules/
 dist/
+!android/vocabulary-capture/dist/
+!android/vocabulary-capture/dist/AIstudyVocabularyCapture-*.apk
+!android/vocabulary-capture/dist/*.sha256
 dist-electron/
 release/
 release-*/

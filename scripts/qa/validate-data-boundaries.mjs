@@ -13,6 +13,7 @@ const requiredStorageModuleIds = [
   "textbooks",
   "textbook-annotations",
   "chrome-port-states",
+  "vocabulary-capture",
   "error-logs",
   "ui-preferences"
 ];
@@ -31,6 +32,8 @@ const forbiddenPackageEntries = [
   "course-pending-operations.json",
   "textbook-pending-scopes.json",
   "textbook-database-backed-scopes.json",
+  "vocabulary-capture.json",
+  "vocabulary-capture-pending-events.json",
   "chrome-ports.json",
   "mysql.config.json"
 ];

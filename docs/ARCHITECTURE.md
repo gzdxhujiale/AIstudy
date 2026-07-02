@@ -278,6 +278,7 @@ The public version has moved beyond the first milestone. Current shipped surface
 - Textbook assets and notes use DB-first storage with local JSON only as disconnected fallback. PDF annotations are DB-owned and pause when the database is unavailable, avoiding a second local annotation source.
 - Chrome fixed-port management currently covers 豆包、ChatGPT、Bilibili、知乎、智联招聘、BOSS 直聘 and 小红书.
 - Chrome fixed-port metadata is DB-first through `chrome_port_states`, while real login cookies stay in per-platform Chrome profiles. Production builds use a stable runtime root outside the app install directory on F drive when available so packaging cleanup or reinstalling does not reset browser login state.
+- Vocabulary capture is a desktop receiver plus Android Accessibility companion APK. The Electron main process listens on port `38673`, filters Baicizhan word-card text, deduplicates accepted words, persists to `vocabulary_capture_documents` and `vocabulary_capture_events`, and uses local pending files only while MySQL is unavailable. The renderer only shows connection state and the filtered word document.
 - Settings contains runtime diagnostics, MCP control, shortcut settings, update management, and user-facing error logs.
 - AI assistant sends prompts through fixed Chrome debugging ports. Chrome discovery accepts registered executables, common install paths, and PATH launchers such as `chrome.cmd` when they point to a real `chrome.exe`; ChatGPT submission prepares the web input, sends through a trusted CDP Enter key event, then reads the reply by conversation order after the current send. Electron main uses Node `ws` with safe Buffer decoding for CDP calls.
 - MCP is a first-class module with renderer UI, Electron controller, external stdio server, HTTP remote access, Tailscale LAN exposure, read/edit tool boundaries, permissions, and call monitoring.
@@ -301,6 +302,9 @@ electron/storageBoundary.ts
 
 electron/textbookAnnotationService.ts
   Main-side service for DB-owned textbook PDF annotations.
+
+electron/vocabularyCaptureService.ts
+  Main-side receiver for Android vocabulary capture, filtering, dedupe, MySQL persistence, and local pending replay.
 
 electron/preload.cts
   ContextBridge surface for renderer APIs. Renderer must not bypass this layer.
@@ -328,6 +332,12 @@ src/renderer/features/textbook/
 
 src/renderer/features/mcp/
   MCP settings UI, tool toggles, debugging output, LAN access state, permissions and monitor controls.
+
+src/renderer/features/vocabulary/
+  Vocabulary capture page that displays receiver connection state and the filtered vocabulary document.
+
+android/vocabulary-capture/
+  Android Accessibility companion APK source and fixed debug APK artifact for Baicizhan vocabulary capture.
 ```
 
 ## Current Feature Rules

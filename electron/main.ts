@@ -32,6 +32,7 @@ import {
 import { createTextbookAnnotationService } from "./textbookAnnotationService.js";
 import { createMcpController } from "./mcp/controller.js";
 import { createMcpRemoteAccessController } from "./mcp/remoteAccess.js";
+import { createVocabularyCaptureService } from "./vocabularyCaptureService.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -8821,6 +8822,11 @@ const mcpRemoteAccessController = createMcpRemoteAccessController({
     mainWindow.webContents.send("mcp:data-changed", change);
   }
 });
+const vocabularyCaptureService = createVocabularyCaptureService({
+  getDataPath: getAistudyDataPath,
+  getMysqlRuntime,
+  getWindows: () => BrowserWindow.getAllWindows()
+});
 
 type McpDataChangeEvent = {
   id: string;
@@ -9528,6 +9534,7 @@ app.whenReady().then(() => {
   registerTextbookProtocolHandler();
   createMainWindow();
   warmMysqlRuntime();
+  void vocabularyCaptureService.start();
   startMcpEventBridge();
   void mcpRemoteAccessController.restore();
 
@@ -9548,6 +9555,7 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   closeTextbookPdfWindows();
   stopMcpEventBridge();
+  void vocabularyCaptureService.stop();
   void mcpRemoteAccessController.close();
   void mysqlRuntime?.pool.end();
 });
@@ -9708,6 +9716,8 @@ ipcMain.handle("mcp:remote-set-permissions", withUserFacingError("mcp:remote-set
 ipcMain.handle("mcp:remote-refresh", withUserFacingError("mcp:remote-refresh", "内网访问检测没有完成。", () => mcpRemoteAccessController.refresh()));
 
 ipcMain.handle("mcp:remote-copy", withUserFacingError("mcp:remote-copy", "内网连接信息没有复制。", () => mcpRemoteAccessController.copyConnectionInfo()));
+
+ipcMain.handle("vocabulary-capture:state", withUserFacingError("vocabulary-capture:state", "词汇采集状态暂时无法读取。", () => vocabularyCaptureService.getState()));
 
 ipcMain.handle("chrome-ports:status", withUserFacingError("chrome-ports:status", "端口状态读取没有完成，请稍后再试。", () => getChromePortStatuses()));
 

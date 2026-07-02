@@ -40,6 +40,7 @@
 - `deployment-new-machine.md`：新机器开发、弱网和离线打包流程。
 - `github-sync.md`：GitHub 同步检查和 Release 资产规则。
 - `updates/INDEX.md`：发布更新摘要。
+- `../android/vocabulary-capture/README.md`：词汇采集 Android 伴随 APK 构建、安装和数据边界。
 
 ## 脚本与维护
 

@@ -20,6 +20,7 @@ npm run dev:app
 
 - `src/renderer/features/`：React 渲染器功能模块，每个模块维护自己的边界和 README。
 - `electron/`：Electron 主进程、preload、IPC、MySQL、导出、备份、更新和系统能力。
+- `android/vocabulary-capture/`：词汇采集 Android 伴随 APK 工程和固定 APK 产物。
 - `scripts/`：开发、打包、QA、导入器、MCP server、架构知识同步等维护脚本。
 - `docs/`：架构基线、功能契约、MCP 接入、部署和仓库协作说明。
 - `assets/`、`build/`：静态资源和打包资源。
@@ -40,6 +41,17 @@ npm run dev:app
 - 可选连接配置见 `.env.example` 或运行时 `AIstudyPublicData/config/mysql.config.json`。
 - 公开版运行时只读取 MySQL 的 `host`、`port`、`user`、`password`；不支持覆盖数据库名和表名。
 - 升级安装包只更新程序文件，不会重置本机连接配置或清空已有 MySQL 数据。
+- 词汇采集使用桌面端 `38673` 接收器和 Android 伴随 APK；正式词汇文档进入 MySQL，断连时使用本地 pending 文件兜底。
+
+## Companion APK
+
+词汇采集 APK 当前固定提交路径：
+
+```text
+android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.4-debug.apk
+```
+
+Android 工程源码位于 `android/vocabulary-capture/`。`app/build/` 是本机构建中间目录，不进入仓库。
 
 ## Development Boundaries
 

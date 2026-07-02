@@ -199,6 +199,8 @@ function Assert-CleanInstallerSource {
     "course-pending-operations.json",
     "textbook-pending-scopes.json",
     "textbook-database-backed-scopes.json",
+    "vocabulary-capture.json",
+    "vocabulary-capture-pending-events.json",
     "chrome-ports.json",
     "bilibili-cookies.txt",
     "mysql.config.json"
