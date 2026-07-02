@@ -5,38 +5,20 @@
 ## 最新版本
 
 - 版本号：0.1.76
-- 更新时间：2026-07-02 19:09:04
-- 功能更新：词汇采集跟随百词斩前台状态实时刷新；新版 Android APK 0.1.5 增加目标应用心跳；新增词汇采集 QA 守卫
+- 更新时间：2026-07-02 20:39:39
+- 功能更新：一键打包生成安装包
 - GitHub：https://github.com/SnowLove0303/AIstudy-Public.git
 - 分支：main
-- 提交：本次推送后以 GitHub main 为准
+- 提交：8254cf3
 
 ## 更新记录
 
-### 0.1.76 - 2026-07-02 19:09:04
+### 0.1.76 - 2026-07-02 20:39:39
 
-- 词汇采集跟随百词斩前台状态实时刷新
-- 新版 Android APK 0.1.5 增加目标应用心跳
-- 新增词汇采集 QA 守卫
+- 一键打包生成安装包
 - GitHub：https://github.com/SnowLove0303/AIstudy-Public.git
 - 分支：main
-- 提交：本次推送后以 GitHub main 为准
-
-### 0.1.76 - 2026-07-02 18:04:04
-
-- 优化知识库节点文档和教材 PDF/笔记的 DB-first 重启恢复
-- 新增知识库可靠性 QA 守卫，覆盖文档本地镜像清理和教材作用域切换 pending 保存
-- GitHub：https://github.com/SnowLove0303/AIstudy-Public.git
-- 分支：main
-- 提交：本次推送后以 GitHub main 为准
-
-### 0.1.76 - 2026-07-02 17:16:00
-
-- 新增词汇实时采集桌面接收器、Android 伴随 APK、DB-first 词汇文档与断连 pending
-- 同步系统文档、接手文档、APK 产物和旧版本环境整理记录
-- GitHub：https://github.com/SnowLove0303/AIstudy-Public.git
-- 分支：main
-- 提交：本次推送后以 GitHub main 为准
+- 提交：8254cf3
 
 ### 0.1.75 - 2026-06-28 22:40:06
 

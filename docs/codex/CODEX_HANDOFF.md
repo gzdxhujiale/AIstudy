@@ -20,12 +20,22 @@
 
 - 最新安装包：`release\AIstudy-Setup-0.1.76.exe`
 - 最新免安装运行版：`release\win-unpacked\AIstudy.exe`
-- 最新词汇采集 APK：`android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.5-debug.apk`
+- 最新词汇采集 APK：`android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.7-debug.apk`
 - 最新更新摘要见：`docs/updates/INDEX.md`
 - 当前主要分支：`main`
 - 本轮系统整理开始前，本地 HEAD 与远端 `origin/main` 一致，提交为 `b861d75 test: expand mind map catalog boundary coverage`；`git fetch --prune origin` 后无远端冲突。
 - 当前公开版已经具备课程/分区、思维导图、节点 Word 文档、教材 PDF 与节点笔记、题库考试、信息采集、词汇实时采集、AI 助手、Chrome 固定端口、MCP 设置页、Tailscale 内网访问、远程权限细分、远程调用监控、导图/文档 MCP 读写工具、更新管理、错误日志、数据库更新保护、左右侧栏折叠、导图快捷键设置、右键文字排版浮层和右侧文档格式面板。
 - 最近一轮更新集中在词汇采集 Android 伴随 APK、桌面端实时接收器、词汇过滤去重、DB-first 持久化、本地 pending 兜底、主导航词汇采集入口、百词斩前台状态实时心跳、纯净打包守卫补充、系统旧版本环境整理、APK 产物入库，以及知识库文档/教材重启恢复可靠性收口。
+
+2026-07-02 词汇采集收尾状态：
+
+- 当前工作区仍为未提交状态，不能直接笼统提交；接手线程应先用 `git status --short --branch` 和 `git diff --name-status` 核对范围后再分组提交。
+- Android 词汇采集 APK 已升级到 `0.1.7` / `versionCode=8`，产物为 `android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.7-debug.apk`，SHA-256 为 `8ff3e6538472664aac28bea56589b3cef33568c106ea053ebc84dc7a0535fcbc`。
+- 应用宝/Androws 旧包安装冲突 `120217 / STATUS_FAILURE_CONFLICT` 已通过先卸载 `com.aistudy.vocabularycapture` 再安装 0.1.7 解决；后续若复现，优先走 Androws 卸载协议或手动卸载旧包，不要反复点重新安装。
+- 打包版 `release\win-unpacked\AIstudy.exe` 已启动验证，词汇采集状态接口 `http://127.0.0.1:38673/vocabulary-capture/state` 返回 `connected/capturing`，心跳约每 2 秒刷新；百词斩不在前台时应降级为 `watching`，授权缺失时应显示 `permission_required`。
+- 最新安装器 `release\AIstudy-Setup-0.1.76.exe` 已由 `npm run dist:oneclick` 重新生成，`release\build-manifest.json` 记录安装器 SHA-256 为 `792db77542a35011550635510073cd05dd0919b096d615852300def3d9dcad93`，运行版 SHA-256 为 `ff2998d6740954feface03408aef69d9030b85f2fcbe6f86b4b4a73371c2b140`。
+- 打包脚本已恢复 `release\win-unpacked\AIstudyPublicData` 和 `AIstudyUserData`，`.tmp\packaging-preserve` 下没有残留便携数据；桌面和开始菜单快捷方式均指向 `F:\XIANGMU\AIstudy-public\release\win-unpacked\AIstudy.exe`。
+- Android debug keystore 的兼容回滚点在 `F:\AIAPP\Codex\rollback\aistudy-vocabulary-debug-keystore-20260702-2015`；不要删除。旧安装包环境清理回滚隔离区见 `F:\AIAPP\Codex\cleanup-quarantine\AIstudy-public-20260702-1708`。
 
 接手时必须先执行 `git status --short --branch` 判断工作区状态。若已有未提交改动，先确认归属，不要用 `git reset --hard` 或 checkout 回滚用户或其他线程的改动。纯净发行版、数据库自动发现和 StorageProvider 收口都会触碰 `electron/main.ts`、打包脚本和文档，后续接手必须先看真实 diff 再继续。
 
@@ -158,7 +168,7 @@ MySQL tables: vocabulary_capture_documents, vocabulary_capture_events
 Local mirror: AIstudyPublicData/state/vocabulary-capture.json
 Pending file: AIstudyPublicData/state/vocabulary-capture-pending-events.json
 Receiver: http://0.0.0.0:38673/vocabulary-capture/events
-APK: android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.5-debug.apk
+APK: android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.7-debug.apk
 ```
 
 词汇采集由桌面端 `electron/vocabularyCaptureService.ts` 负责筛选、去重、入库和 pending 重放。Android APK 只实时发送百词斩可访问性文本和前台目标状态，不保存业务数据。前端 `src/renderer/features/vocabulary/` 只显示“等待连接 / 等待百词斩 / 采集中 / 异常”和已经筛选后的词汇文档，不展示调试端口、原始节点树或内部实现说明。
@@ -599,7 +609,7 @@ gradle --no-daemon :app:assembleDebug
 构建后将 `android\vocabulary-capture\app\build\outputs\apk\debug\app-debug.apk` 复制到：
 
 ```text
-android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.5-debug.apk
+android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.7-debug.apk
 ```
 
 交付前要确认：
@@ -613,7 +623,7 @@ android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.5-debug.apk
 - 新功能对应模块 README 或主 README 已补。
 - 功能开发内容已同步或准备同步到 `AIstudy 全量功能架构`。
 - 如果打包发布，确认 `release\AIstudy-Setup-当前版本.exe` 与 `release\win-unpacked\AIstudy.exe` 均已更新。
-- 如果涉及词汇采集，确认 `android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.5-debug.apk` 已更新并提交；`android\vocabulary-capture\app\build\` 不应作为源码提交。
+- 如果涉及词汇采集，确认 `android\vocabulary-capture\dist\AIstudyVocabularyCapture-0.1.7-debug.apk` 已更新并提交；`android\vocabulary-capture\app\build\` 不应作为源码提交。
 - 如果打包发布，先杀死旧实例，打包后打开最新版本实际验证，并确认桌面、开始菜单、固定栏或其他快捷方式指向最新版本。
 - 如果使用 `npm run dist:oneclick`，打包后检查并恢复 `docs/updates/INDEX.md` 的真实更新摘要。
 - 发布前建议运行 `npm run github:sync:doctor`，确认 origin、upstream、ahead/behind、工作区、GitHub CLI 登录和 latest release 安装包资产状态。

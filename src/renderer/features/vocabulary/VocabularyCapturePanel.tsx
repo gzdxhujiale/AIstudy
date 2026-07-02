@@ -8,7 +8,7 @@ type VocabularyCaptureState = {
   };
   connection: {
     status: "connected" | "waiting";
-    targetStatus: "capturing" | "watching" | "waiting";
+    targetStatus: "capturing" | "watching" | "permission_required" | "waiting";
     targetActive: boolean;
     lastSeenAt: string | null;
     lastTargetActiveAt: string | null;
@@ -82,12 +82,14 @@ function normalizeCaptureState(value: unknown): VocabularyCaptureState {
 function getStatusText(state: VocabularyCaptureState) {
   if (state.receiver.status === "error") return "异常";
   if (state.connection.status !== "connected") return "等待连接";
+  if (state.connection.targetStatus === "permission_required") return "等待授权";
   return state.connection.targetStatus === "capturing" ? "采集中" : "等待百词斩";
 }
 
 function getStatusClass(state: VocabularyCaptureState) {
   if (state.receiver.status === "error") return "error";
   if (state.connection.status !== "connected") return "waiting";
+  if (state.connection.targetStatus === "permission_required") return "watching";
   return state.connection.targetStatus === "capturing" ? "capturing" : "watching";
 }
 

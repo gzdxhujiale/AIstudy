@@ -29,7 +29,7 @@
 当前可安装调试 APK 固定放在：
 
 ```text
-android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.5-debug.apk
+android/vocabulary-capture/dist/AIstudyVocabularyCapture-0.1.7-debug.apk
 ```
 
 构建命令：

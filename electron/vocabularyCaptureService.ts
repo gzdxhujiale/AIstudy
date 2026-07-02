@@ -7,6 +7,7 @@ import type { Pool } from "mysql2/promise";
 
 const DEFAULT_CAPTURE_PORT = 38673;
 const CONNECTION_TTL_MS = 15000;
+const COMPANION_LAUNCH_INTERVAL_MS = 30000;
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_CAPTURE_TEXT_CHARS = 30000;
 const MAX_DOCUMENT_TEXT_CHARS = 1_000_000;
@@ -67,7 +68,7 @@ export type VocabularyCaptureState = {
   };
   connection: {
     status: "connected" | "waiting";
-    targetStatus: "capturing" | "watching" | "waiting";
+    targetStatus: "capturing" | "watching" | "permission_required" | "waiting";
     targetActive: boolean;
     lastSeenAt: string | null;
     lastTargetActiveAt: string | null;
@@ -89,6 +90,7 @@ type VocabularyCaptureServiceOptions = {
   getDataPath: (...segments: string[]) => string;
   getMysqlRuntime: () => Promise<VocabularyCaptureMysqlRuntime>;
   getWindows: () => BrowserWindow[];
+  launchCompanionApp?: () => Promise<void> | void;
   port?: number;
 };
 
@@ -419,6 +421,7 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
   let receiverError = "";
   let flushPromise: Promise<void> | null = null;
   let tickTimer: NodeJS.Timeout | null = null;
+  let lastCompanionLaunchAt = 0;
 
   const mirrorPath = () => options.getDataPath("state", "vocabulary-capture.json");
   const pendingPath = () => options.getDataPath("state", "vocabulary-capture-pending-events.json");
@@ -431,6 +434,14 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
     const targetActive = connected && mirror.targetActive && mirror.lastTargetActiveAt
       ? now - new Date(mirror.lastTargetActiveAt).getTime() <= CONNECTION_TTL_MS
       : false;
+    const serviceStatus = mirror.serviceStatus.trim().toLowerCase();
+    const targetStatus = !connected
+      ? "waiting"
+      : serviceStatus === "permission_required"
+        ? "permission_required"
+        : targetActive
+          ? "capturing"
+          : "watching";
     return {
       receiver: {
         status: receiverError ? "error" : "listening",
@@ -439,7 +450,7 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
       },
       connection: {
         status: connected ? "connected" : "waiting",
-        targetStatus: !connected ? "waiting" : targetActive ? "capturing" : "watching",
+        targetStatus,
         targetActive,
         lastSeenAt: mirror.lastSeenAt,
         lastTargetActiveAt: mirror.lastTargetActiveAt,
@@ -656,6 +667,18 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
     return { accepted: true, duplicate: false };
   }
 
+  function shouldLaunchCompanionApp() {
+    if (!options.launchCompanionApp || receiverError) return false;
+    if (mirror.lastSeenAt && Date.now() - new Date(mirror.lastSeenAt).getTime() <= CONNECTION_TTL_MS) return false;
+    return Date.now() - lastCompanionLaunchAt >= COMPANION_LAUNCH_INTERVAL_MS;
+  }
+
+  function maybeLaunchCompanionApp() {
+    if (!shouldLaunchCompanionApp()) return;
+    lastCompanionLaunchAt = Date.now();
+    void Promise.resolve(options.launchCompanionApp?.()).catch(() => undefined);
+  }
+
   async function handleRequest(request: IncomingMessage, response: ServerResponse) {
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
@@ -693,10 +716,12 @@ export function createVocabularyCaptureService(options: VocabularyCaptureService
       server.listen(port, "0.0.0.0", () => {
         receiverError = "";
         broadcastState();
+        maybeLaunchCompanionApp();
       });
       tickTimer = setInterval(() => {
         broadcastState();
         void flushPendingToMysql();
+        maybeLaunchCompanionApp();
       }, 5000);
       void flushPendingToMysql();
     },

@@ -33,6 +33,7 @@ import { createTextbookAnnotationService } from "./textbookAnnotationService.js"
 import { createMcpController } from "./mcp/controller.js";
 import { createMcpRemoteAccessController } from "./mcp/remoteAccess.js";
 import { createVocabularyCaptureService } from "./vocabularyCaptureService.js";
+import { createVocabularyCaptureCompanionLauncher } from "./vocabularyCaptureCompanionLauncher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -8822,10 +8823,12 @@ const mcpRemoteAccessController = createMcpRemoteAccessController({
     mainWindow.webContents.send("mcp:data-changed", change);
   }
 });
+const vocabularyCaptureCompanionLauncher = createVocabularyCaptureCompanionLauncher();
 const vocabularyCaptureService = createVocabularyCaptureService({
   getDataPath: getAistudyDataPath,
   getMysqlRuntime,
-  getWindows: () => BrowserWindow.getAllWindows()
+  getWindows: () => BrowserWindow.getAllWindows(),
+  launchCompanionApp: () => vocabularyCaptureCompanionLauncher.launchIfRuntimeActive()
 });
 
 type McpDataChangeEvent = {
