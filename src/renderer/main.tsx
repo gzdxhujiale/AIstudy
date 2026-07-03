@@ -11,6 +11,7 @@ import {
   ChevronsDown,
   ChevronsRight,
   ClipboardList,
+  Database,
   Download,
   ExternalLink,
   FileText,
@@ -202,7 +203,7 @@ class AppErrorBoundary extends React.Component<React.PropsWithChildren, AppError
 type CourseDialogMode = "create" | "edit";
 type AppSection = "knowledge" | "collection" | "exam" | "assistant" | "chromePorts" | "vocabulary";
 type DetailPaneMode = "catalog" | "format";
-type SettingsPage = "runtime" | "mcp" | "shortcuts" | "updates" | "errorLogs";
+type SettingsPage = "database" | "runtime" | "mcp" | "shortcuts" | "updates" | "errorLogs";
 
 function normalizeWorkspaceEditorMode(value: unknown): WorkspaceEditorMode {
   return value === "word" || value === "textbook" ? value : "mindmap";
@@ -233,6 +234,10 @@ declare global {
       diagnose: () => Promise<RuntimeDiagnosticResult>;
       copyDiagnosticReport: () => Promise<RuntimeDiagnosticReportCopyResult>;
       openDataRoot: () => Promise<boolean>;
+    };
+    aistudyDatabase?: {
+      getConfig: () => Promise<any>;
+      saveConfig: (config: any) => Promise<void>;
     };
   }
 }
@@ -269,6 +274,106 @@ async function loadUpdateInfo() {
     throw new Error("更新服务不可用。");
   }
   return window.aistudyUpdates.loadInfo();
+}
+function DatabaseSettingsPanel() {
+  const [config, setConfig] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [saving, setSaving] = React.useState(false);
+  const [message, setMessage] = React.useState("");
+
+  React.useEffect(() => {
+    window.aistudyDatabase?.getConfig().then((cfg) => {
+      setConfig(cfg);
+      setLoading(false);
+    }).catch(err => {
+      setMessage("获取配置失败：" + (err.message || err));
+      setLoading(false);
+    });
+  }, []);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!window.aistudyDatabase) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await window.aistudyDatabase.saveConfig(config);
+      setMessage("配置已保存。请重启应用以生效新连接！");
+    } catch (err: any) {
+      setMessage("保存失败：" + (err.message || err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value, type, checked } = e.target;
+    setConfig((prev: any) => ({
+      ...prev,
+      [name]: type === "checkbox" ? checked : type === "number" ? Number(value) : value
+    }));
+  };
+
+  if (loading) return <div className="settings-panel"><p>加载配置中...</p></div>;
+  if (!config) return <div className="settings-panel"><p>无法加载配置，可能当前版本不支持。</p></div>;
+
+  return (
+    <div className="shortcut-settings-panel database-settings">
+      <section className="settings-section runtime-check-intro">
+        <div className="settings-section-heading">
+          <div>
+            <h3>数据库连接配置</h3>
+            <p>用于修改连接到的本地 MySQL 或远程 TiDB。保存后请重启应用。</p>
+          </div>
+        </div>
+      </section>
+
+      <form onSubmit={handleSave} className="shortcut-settings-list">
+        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+          <div className="shortcut-settings-main">
+            <strong>Host</strong>
+          </div>
+          <input type="text" name="host" value={config.host || ""} onChange={handleChange} style={{ width: 240, textAlign: 'left', padding: '0 8px' }} />
+        </article>
+        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+          <div className="shortcut-settings-main">
+            <strong>Port</strong>
+          </div>
+          <input type="number" name="port" value={config.port || 3306} onChange={handleChange} style={{ width: 100, textAlign: 'left', padding: '0 8px' }} />
+        </article>
+        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+          <div className="shortcut-settings-main">
+            <strong>User</strong>
+          </div>
+          <input type="text" name="user" value={config.user || ""} onChange={handleChange} style={{ width: 200, textAlign: 'left', padding: '0 8px' }} />
+        </article>
+        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+          <div className="shortcut-settings-main">
+            <strong>Password</strong>
+          </div>
+          <input type="password" name="password" value={config.password || ""} onChange={handleChange} style={{ width: 200, textAlign: 'left', padding: '0 8px' }} />
+        </article>
+        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+          <div className="shortcut-settings-main">
+            <label htmlFor="skipSchemaCreation" style={{ fontWeight: 560, cursor: 'pointer' }}>跳过建表检查 (加速连接)</label>
+          </div>
+          <input type="checkbox" id="skipSchemaCreation" name="skipSchemaCreation" checked={config.skipSchemaCreation || false} onChange={handleChange} style={{ cursor: 'pointer', justifySelf: 'start', width: 'auto', height: '16px', margin: '0' }} />
+        </article>
+
+        {message && (
+          <p className={message.includes("失败") ? "status-message error" : "update-status"} style={{ margin: "16px 0 0" }}>
+            {message}
+          </p>
+        )}
+
+        <div className="shortcut-settings-actions">
+          <button className="primary-button" type="submit" disabled={saving}>
+            {saving ? "保存中..." : "保存配置"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 function SettingsDialog({ onClose }: { onClose: () => void }) {
@@ -560,15 +665,17 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
       ? `${formatFileSize(visibleDownloadProgress.downloadedBytes)} / ${formatFileSize(visibleDownloadProgress.totalBytes)}`
       : formatFileSize(visibleDownloadProgress.downloadedBytes))
     : "";
-  const settingsPageTitle = activePage === "runtime"
-    ? "环境检查"
-    : activePage === "mcp"
-      ? "MCP 控制台"
-      : activePage === "shortcuts"
-        ? "快捷键"
-        : activePage === "updates"
-          ? "更新管理"
-          : "报错日志";
+  const settingsPageTitle = activePage === "database"
+    ? "数据库配置"
+    : activePage === "runtime"
+      ? "环境检查"
+      : activePage === "mcp"
+        ? "MCP 控制台"
+        : activePage === "shortcuts"
+          ? "快捷键"
+          : activePage === "updates"
+            ? "更新管理"
+            : "报错日志";
 
   return (
     <div className="settings-backdrop" role="presentation">
@@ -578,6 +685,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
             <Settings size={18} />
             <span>设置</span>
           </div>
+
           <button className={activePage === "runtime" ? "settings-nav-item active" : "settings-nav-item"} type="button" onClick={() => setActivePage("runtime")}>
             <CheckCircle2 size={16} />
             <span>环境检查</span>
@@ -594,6 +702,10 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
             <GitBranch size={16} />
             <span>更新管理</span>
           </button>
+          <button className={activePage === "database" ? "settings-nav-item active" : "settings-nav-item"} type="button" onClick={() => setActivePage("database")}>
+            <Database size={16} />
+            <span>数据库配置</span>
+          </button>
           <button className={activePage === "errorLogs" ? "settings-nav-item active" : "settings-nav-item"} type="button" onClick={() => setActivePage("errorLogs")}>
             <AlertCircle size={16} />
             <span>报错日志</span>
@@ -602,15 +714,16 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
 
         <main className="settings-content">
           <header className="settings-header">
-            <div>
-              <h2 className="settings-page-title">{settingsPageTitle}</h2>
-            </div>
+            <div />
             <button className="icon-button" title="关闭" aria-label="关闭设置" type="button" onClick={onClose}>
               <X size={17} />
             </button>
           </header>
 
-          {activePage === "runtime" ? (
+          <div className="settings-panels-wrapper">
+            {activePage === "database" ? (
+            <DatabaseSettingsPanel />
+          ) : activePage === "runtime" ? (
             <div className="runtime-check-panel">
               <section className="settings-section runtime-check-intro">
                 <div className="settings-section-heading">
@@ -707,174 +820,175 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
               </div>
             </div>
           ) : activePage === "updates" ? (
-          <div className="update-panel">
-            <section className={`windows-update-hero ${updateStateClass}`}>
-              <div className="windows-update-main">
-                <div className="windows-update-mark" aria-hidden="true">
-                  <RefreshCw size={56} strokeWidth={1.9} />
-                  <span>
-                    <CheckCircle2 size={18} />
-                  </span>
-                </div>
-                <div className="windows-update-copy">
-                  <p className="section-kicker">版本状态</p>
-                  <h3>{updateHeadline}</h3>
-                  <p>{updateDescription}</p>
-                  <p className="update-check-time">
-                    {lastCheckedAt ? `上次检查时间：${lastCheckedAt}` : `当前版本：${updateInfo?.appVersion ?? "-"}`}
-                  </p>
-                </div>
-              </div>
-              <button className="primary-button update-check-button" type="button" onClick={checkUpdate} disabled={isChecking || isDownloading}>
-                <RefreshCw size={15} />
-                {isChecking ? "检测中" : "检测更新"}
-              </button>
-            </section>
-
-            {status ? <p className="update-status">{status}</p> : null}
-            {error ? <p className="status-message error">{error}</p> : null}
-
-            {checkResult?.hasUpdate ? (
-              <section className="release-card" aria-label="新版本更新内容">
-                <div className="release-card-heading">
-                  <div>
-                    <p className="section-kicker">更新内容</p>
-                    <h3>版本 {checkResult.latestVersion}</h3>
-                  </div>
-                  {checkResult.publishedAt ? <span>{formatDate(checkResult.publishedAt)}</span> : null}
-                </div>
-
-                <ol className="release-notes">
-                  {checkResult.notes.map((note, index) => (
-                    <li key={`${note}-${index}`}>{note}</li>
-                  ))}
-                </ol>
-
-                {checkResult.assetName ? (
-                  <p className="release-asset">
-                    安装包：{checkResult.assetName}
-                    {checkResult.assetSize ? `（${formatFileSize(checkResult.assetSize)}）` : ""}
-                  </p>
-                ) : (
-                  <p className="release-asset warning">该版本未找到 Windows 安装包。</p>
-                )}
-              </section>
-            ) : null}
-
-            <section className="update-options" aria-label="更新选项">
-              <p className="settings-section-label">更多选项</p>
-              <button
-                className="update-option-row"
-                type="button"
-                onClick={downloadUpdate}
-                disabled={!checkResult?.hasUpdate || !checkResult.downloadUrl || isDownloading}
-              >
-                <span className="update-option-icon"><Download size={18} /></span>
-                <span className="update-option-copy">
-                  <strong>{isDownloading ? "正在下载更新" : "下载并安装更新"}</strong>
-                  <span>{downloadDescription}</span>
-                </span>
-                <span className="update-option-meta">{onlineVersion}</span>
-              </button>
-              {visibleDownloadProgress ? (
-                <div className="update-download-progress" aria-label="下载进度">
-                  <div className="update-progress-heading">
+            <div className="update-panel">
+              <section className={`windows-update-hero ${updateStateClass}`}>
+                <div className="windows-update-main">
+                  <div className="windows-update-mark" aria-hidden="true">
+                    <RefreshCw size={56} strokeWidth={1.9} />
                     <span>
-                      {visibleDownloadProgress.status === "complete"
-                        ? "下载完成"
-                        : visibleDownloadProgress.status === "paused"
-                          ? "已暂停"
-                          : "正在下载"}
+                      <CheckCircle2 size={18} />
                     </span>
-                    <strong>{progressPercent}%</strong>
                   </div>
-                  <div className="update-progress-track" aria-hidden="true">
-                    <span style={{ width: `${progressPercent}%` }} />
+                  <div className="windows-update-copy">
+                    <p className="section-kicker">版本状态</p>
+                    <h3>{updateHeadline}</h3>
+                    <p>{updateDescription}</p>
+                    <p className="update-check-time">
+                      {lastCheckedAt ? `上次检查时间：${lastCheckedAt}` : `当前版本：${updateInfo?.appVersion ?? "-"}`}
+                    </p>
                   </div>
-                  <div className="update-progress-meta">
-                    <span>{visibleDownloadProgress.fileName}</span>
-                    <span>{progressSizeText}</span>
-                  </div>
-                  {visibleDownloadProgress.status !== "complete" ? (
-                    <div className="update-progress-actions" aria-label="下载控制">
-                      <button type="button" onClick={isDownloadPaused ? resumeDownload : pauseDownload}>
-                        {isDownloadPaused ? <Play size={14} /> : <Pause size={14} />}
-                        <span>{isDownloadPaused ? "继续" : "暂停"}</span>
-                      </button>
-                      <button type="button" onClick={cancelDownload}>
-                        <X size={14} />
-                        <span>取消</span>
-                      </button>
+                </div>
+                <button className="primary-button update-check-button" type="button" onClick={checkUpdate} disabled={isChecking || isDownloading}>
+                  <RefreshCw size={15} />
+                  {isChecking ? "检测中" : "检测更新"}
+                </button>
+              </section>
+
+              {status ? <p className="update-status">{status}</p> : null}
+              {error ? <p className="status-message error">{error}</p> : null}
+
+              {checkResult?.hasUpdate ? (
+                <section className="release-card" aria-label="新版本更新内容">
+                  <div className="release-card-heading">
+                    <div>
+                      <p className="section-kicker">更新内容</p>
+                      <h3>版本 {checkResult.latestVersion}</h3>
                     </div>
-                  ) : null}
+                    {checkResult.publishedAt ? <span>{formatDate(checkResult.publishedAt)}</span> : null}
+                  </div>
+
+                  <ol className="release-notes">
+                    {checkResult.notes.map((note, index) => (
+                      <li key={`${note}-${index}`}>{note}</li>
+                    ))}
+                  </ol>
+
+                  {checkResult.assetName ? (
+                    <p className="release-asset">
+                      安装包：{checkResult.assetName}
+                      {checkResult.assetSize ? `（${formatFileSize(checkResult.assetSize)}）` : ""}
+                    </p>
+                  ) : (
+                    <p className="release-asset warning">该版本未找到 Windows 安装包。</p>
+                  )}
+                </section>
+              ) : null}
+
+              <section className="update-options" aria-label="更新选项">
+                <p className="settings-section-label">更多选项</p>
+                <button
+                  className="update-option-row"
+                  type="button"
+                  onClick={downloadUpdate}
+                  disabled={!checkResult?.hasUpdate || !checkResult.downloadUrl || isDownloading}
+                >
+                  <span className="update-option-icon"><Download size={18} /></span>
+                  <span className="update-option-copy">
+                    <strong>{isDownloading ? "正在下载更新" : "下载并安装更新"}</strong>
+                    <span>{downloadDescription}</span>
+                  </span>
+                  <span className="update-option-meta">{onlineVersion}</span>
+                </button>
+                {visibleDownloadProgress ? (
+                  <div className="update-download-progress" aria-label="下载进度">
+                    <div className="update-progress-heading">
+                      <span>
+                        {visibleDownloadProgress.status === "complete"
+                          ? "下载完成"
+                          : visibleDownloadProgress.status === "paused"
+                            ? "已暂停"
+                            : "正在下载"}
+                      </span>
+                      <strong>{progressPercent}%</strong>
+                    </div>
+                    <div className="update-progress-track" aria-hidden="true">
+                      <span style={{ width: `${progressPercent}%` }} />
+                    </div>
+                    <div className="update-progress-meta">
+                      <span>{visibleDownloadProgress.fileName}</span>
+                      <span>{progressSizeText}</span>
+                    </div>
+                    {visibleDownloadProgress.status !== "complete" ? (
+                      <div className="update-progress-actions" aria-label="下载控制">
+                        <button type="button" onClick={isDownloadPaused ? resumeDownload : pauseDownload}>
+                          {isDownloadPaused ? <Play size={14} /> : <Pause size={14} />}
+                          <span>{isDownloadPaused ? "继续" : "暂停"}</span>
+                        </button>
+                        <button type="button" onClick={cancelDownload}>
+                          <X size={14} />
+                          <span>取消</span>
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <button className="update-option-row" type="button" onClick={installUpdate} disabled={!downloadResult}>
+                  <span className="update-option-icon"><CheckCircle2 size={18} /></span>
+                  <span className="update-option-copy">
+                    <strong>安装更新</strong>
+                    <span>{installDescription}</span>
+                  </span>
+                  <span className="update-option-meta">{downloadResult ? "可安装" : updateStateLabel}</span>
+                </button>
+                <button
+                  className="update-option-row"
+                  type="button"
+                  disabled={!checkResult?.releaseUrl}
+                  onClick={() => checkResult?.releaseUrl && void window.aistudyUpdates?.openReleasePage(checkResult.releaseUrl)}
+                >
+                  <span className="update-option-icon"><ExternalLink size={18} /></span>
+                  <span className="update-option-copy">
+                    <strong>查看发布页</strong>
+                    <span>打开线上版本页面，查看完整发布说明。</span>
+                  </span>
+                  <span className="update-option-meta">{checkResult?.publishedAt ? formatDate(checkResult.publishedAt) : ""}</span>
+                </button>
+              </section>
+            </div>
+          ) : (
+            <div className="error-log-panel">
+              <section className="settings-section error-log-intro">
+                <div className="settings-section-heading">
+                  <div>
+                    <h3>最近的报错记录</h3>
+                    <p>这里会记录操作失败的时间和位置，方便后续排查；页面不会展示代码细节。</p>
+                  </div>
+                  <button className="secondary-button" type="button" onClick={loadErrorLogs} disabled={isLoadingErrorLogs}>
+                    <RefreshCw size={15} />
+                    {isLoadingErrorLogs ? "读取中" : "刷新"}
+                  </button>
+                </div>
+              </section>
+
+              {errorLogMessage ? <p className="update-status">{errorLogMessage}</p> : null}
+
+              {errorLogs.length ? (
+                <div className="error-log-list" aria-label="报错日志列表">
+                  {errorLogs.map((log) => (
+                    <article className="error-log-item" key={log.id}>
+                      <div className="error-log-main">
+                        <strong>{log.userMessage || "有一个操作没有完成"}</strong>
+                        <span>{formatDateTime(log.createdAt)}</span>
+                      </div>
+                      <div className="error-log-meta">
+                        <span>{log.source}</span>
+                        <span>编号 {log.errorCode || log.id.slice(0, 8)}</span>
+                        {log.retryable ? <span>可重试</span> : <span>需处理</span>}
+                      </div>
+                      {log.reason || log.action ? (
+                        <p className="error-log-detail">
+                          {log.reason ? `原因：${log.reason}` : ""}
+                          {log.reason && log.action ? " " : ""}
+                          {log.action ? `建议：${log.action}` : ""}
+                        </p>
+                      ) : null}
+                    </article>
+                  ))}
                 </div>
               ) : null}
-              <button className="update-option-row" type="button" onClick={installUpdate} disabled={!downloadResult}>
-                <span className="update-option-icon"><CheckCircle2 size={18} /></span>
-                <span className="update-option-copy">
-                  <strong>安装更新</strong>
-                  <span>{installDescription}</span>
-                </span>
-                <span className="update-option-meta">{downloadResult ? "可安装" : updateStateLabel}</span>
-              </button>
-              <button
-                className="update-option-row"
-                type="button"
-                disabled={!checkResult?.releaseUrl}
-                onClick={() => checkResult?.releaseUrl && void window.aistudyUpdates?.openReleasePage(checkResult.releaseUrl)}
-              >
-                <span className="update-option-icon"><ExternalLink size={18} /></span>
-                <span className="update-option-copy">
-                  <strong>查看发布页</strong>
-                  <span>打开线上版本页面，查看完整发布说明。</span>
-                </span>
-                <span className="update-option-meta">{checkResult?.publishedAt ? formatDate(checkResult.publishedAt) : ""}</span>
-              </button>
-            </section>
-          </div>
-          ) : (
-          <div className="error-log-panel">
-            <section className="settings-section error-log-intro">
-              <div className="settings-section-heading">
-                <div>
-                  <h3>最近的报错记录</h3>
-                  <p>这里会记录操作失败的时间和位置，方便后续排查；页面不会展示代码细节。</p>
-                </div>
-                <button className="secondary-button" type="button" onClick={loadErrorLogs} disabled={isLoadingErrorLogs}>
-                  <RefreshCw size={15} />
-                  {isLoadingErrorLogs ? "读取中" : "刷新"}
-                </button>
-              </div>
-            </section>
-
-            {errorLogMessage ? <p className="update-status">{errorLogMessage}</p> : null}
-
-            {errorLogs.length ? (
-              <div className="error-log-list" aria-label="报错日志列表">
-                {errorLogs.map((log) => (
-                  <article className="error-log-item" key={log.id}>
-                    <div className="error-log-main">
-                      <strong>{log.userMessage || "有一个操作没有完成"}</strong>
-                      <span>{formatDateTime(log.createdAt)}</span>
-                    </div>
-                    <div className="error-log-meta">
-                      <span>{log.source}</span>
-                      <span>编号 {log.errorCode || log.id.slice(0, 8)}</span>
-                      {log.retryable ? <span>可重试</span> : <span>需处理</span>}
-                    </div>
-                    {log.reason || log.action ? (
-                      <p className="error-log-detail">
-                        {log.reason ? `原因：${log.reason}` : ""}
-                        {log.reason && log.action ? " " : ""}
-                        {log.action ? `建议：${log.action}` : ""}
-                      </p>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-            ) : null}
-          </div>
+            </div>
           )}
+          </div>
         </main>
       </section>
     </div>
@@ -1298,173 +1412,173 @@ function App() {
       </aside>
 
       {activeSection === "knowledge" ? (
-      <main className={`study-layout${isLibraryPaneCollapsed ? " library-collapsed" : ""}${isCatalogPaneCollapsed ? " catalog-collapsed" : ""}`}>
-        <button
-          className="pane-collapse-button library-toggle"
-          title={isLibraryPaneCollapsed ? "展开知识库" : "收起知识库"}
-          aria-label={isLibraryPaneCollapsed ? "展开知识库" : "收起知识库"}
-          type="button"
-          onClick={() => setIsLibraryPaneCollapsed((value) => !value)}
-        >
-          {isLibraryPaneCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
-        </button>
-        <button
-          className="pane-collapse-button catalog-toggle-button"
-          title={isCatalogPaneCollapsed ? "展开目录" : "收起目录"}
-          aria-label={isCatalogPaneCollapsed ? "展开目录" : "收起目录"}
-          type="button"
-          onClick={() => setIsCatalogPaneCollapsed((value) => !value)}
-        >
-          {isCatalogPaneCollapsed ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
-        </button>
-        <CourseSidebar
-          sections={courseSections}
-          courses={courses}
-          activeCourseId={activeCourseId}
-          isHydrated={isHydrated}
-          syncStatus={courseSyncStatus}
-          onRetrySync={() => void retryCourseSync()}
-          onSelectCourse={selectCourse}
-          onCreateCourse={openCreateDialog}
-          onEditCourse={openEditDialog}
-          onDeleteCourse={deleteCourse}
-          onCreateSection={createCourseSection}
-          onRenameSection={renameCourseSection}
-          onToggleSection={toggleCourseSection}
-          onToggleAllSections={toggleAllCourseSections}
-          onDeleteSection={deleteCourseSection}
-          onMoveCourse={moveCourseToSection}
-          onReorderCourse={reorderCourse}
-          onReorderSection={reorderCourseSection}
-        />
+        <main className={`study-layout${isLibraryPaneCollapsed ? " library-collapsed" : ""}${isCatalogPaneCollapsed ? " catalog-collapsed" : ""}`}>
+          <button
+            className="pane-collapse-button library-toggle"
+            title={isLibraryPaneCollapsed ? "展开知识库" : "收起知识库"}
+            aria-label={isLibraryPaneCollapsed ? "展开知识库" : "收起知识库"}
+            type="button"
+            onClick={() => setIsLibraryPaneCollapsed((value) => !value)}
+          >
+            {isLibraryPaneCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          </button>
+          <button
+            className="pane-collapse-button catalog-toggle-button"
+            title={isCatalogPaneCollapsed ? "展开目录" : "收起目录"}
+            aria-label={isCatalogPaneCollapsed ? "展开目录" : "收起目录"}
+            type="button"
+            onClick={() => setIsCatalogPaneCollapsed((value) => !value)}
+          >
+            {isCatalogPaneCollapsed ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
+          </button>
+          <CourseSidebar
+            sections={courseSections}
+            courses={courses}
+            activeCourseId={activeCourseId}
+            isHydrated={isHydrated}
+            syncStatus={courseSyncStatus}
+            onRetrySync={() => void retryCourseSync()}
+            onSelectCourse={selectCourse}
+            onCreateCourse={openCreateDialog}
+            onEditCourse={openEditDialog}
+            onDeleteCourse={deleteCourse}
+            onCreateSection={createCourseSection}
+            onRenameSection={renameCourseSection}
+            onToggleSection={toggleCourseSection}
+            onToggleAllSections={toggleAllCourseSections}
+            onDeleteSection={deleteCourseSection}
+            onMoveCourse={moveCourseToSection}
+            onReorderCourse={reorderCourse}
+            onReorderSection={reorderCourseSection}
+          />
 
-        <section className="canvas-pane" aria-label="学习工作台">
-          <div className="canvas-toolbar">
-            <div>
-              <h2>{activeCourse ? activeCourse.name : "未选择课程"}</h2>
-            </div>
-            <div className="workspace-mode-switch" aria-label="编辑器切换">
-              <button
-                type="button"
-                className={workspaceEditorMode === "mindmap" ? "active" : ""}
-                onClick={() => requestWorkspaceMode("mindmap")}
-                disabled={!activeCourse}
-              >
-                <GitBranch size={15} />
-                <span>导图</span>
-              </button>
-              <button
-                type="button"
-                className={workspaceEditorMode === "word" ? "active" : ""}
-                onClick={() => requestWorkspaceMode("word")}
-                disabled={!activeCourse}
-              >
-                <FileText size={15} />
-                <span>文档</span>
-              </button>
-              <button
-                type="button"
-                className={workspaceEditorMode === "textbook" ? "active" : ""}
-                onClick={() => requestWorkspaceMode("textbook")}
-                disabled={!activeCourse}
-              >
-                <BookOpen size={15} />
-                <span>教材</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="editor-mount">
-            <MindMapWorkspace
-              courseId={activeCourse?.id ?? null}
-              courseName={activeCourse?.name ?? "New mind map"}
-              editorMode={workspaceEditorMode}
-              externalChangeRevision={externalContentRevision}
-              modeChangeRequest={modeChangeRequest}
-              nodeSelectionRequest={nodeSelectionRequest}
-              nodeDeletionRequest={nodeDeletionRequest}
-              catalogBoundaryRequest={catalogBoundaryRequest}
-              onEditorModeChange={handleWorkspaceEditorModeChanged}
-              onOutlineChanged={setMindMapOutline}
-              onMindMapIdChanged={setActiveMindMapId}
-              onNodeSelectedChanged={setSelectedMindMapNode}
-              isCatalogPaneCollapsed={isCatalogPaneCollapsed}
-              documentDetailPaneMode={detailPaneMode}
-              onOpenDocumentFormatPane={openDocumentFormatPane}
-              onCloseDocumentFormatPane={closeDocumentFormatPane}
-            />
-          </div>
-        </section>
-
-        <aside className="detail-pane" aria-label={workspaceEditorMode === "word" && detailPaneMode === "format" ? "排版" : "目录"}>
-          <div className="detail-heading">
-            <div>
-              <h2>{workspaceEditorMode === "word" && detailPaneMode === "format" ? "排版" : "目录"}</h2>
-            </div>
-            {!(workspaceEditorMode === "word" && detailPaneMode === "format") && mindMapOutline.length > 0 ? (
-              <div className="catalog-tree-toolbar" aria-label="目录视图">
+          <section className="canvas-pane" aria-label="学习工作台">
+            <div className="canvas-toolbar">
+              <div>
+                <h2>{activeCourse ? activeCourse.name : "未选择课程"}</h2>
+              </div>
+              <div className="workspace-mode-switch" aria-label="编辑器切换">
                 <button
                   type="button"
-                  title="展开全部；右键只展开父级"
-                  onClick={() => requestCatalogTree("expand-all")}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    requestCatalogTree("expand-branches");
-                  }}
+                  className={workspaceEditorMode === "mindmap" ? "active" : ""}
+                  onClick={() => requestWorkspaceMode("mindmap")}
+                  disabled={!activeCourse}
                 >
-                  <ChevronsDown size={14} />
-                  <span>展开</span>
+                  <GitBranch size={15} />
+                  <span>导图</span>
                 </button>
-                <button type="button" onClick={() => requestCatalogTree("collapse-all")}>
-                  <ChevronsRight size={14} />
-                  <span>收叠</span>
+                <button
+                  type="button"
+                  className={workspaceEditorMode === "word" ? "active" : ""}
+                  onClick={() => requestWorkspaceMode("word")}
+                  disabled={!activeCourse}
+                >
+                  <FileText size={15} />
+                  <span>文档</span>
+                </button>
+                <button
+                  type="button"
+                  className={workspaceEditorMode === "textbook" ? "active" : ""}
+                  onClick={() => requestWorkspaceMode("textbook")}
+                  disabled={!activeCourse}
+                >
+                  <BookOpen size={15} />
+                  <span>教材</span>
                 </button>
               </div>
-            ) : null}
-            {workspaceEditorMode === "word" ? (
-              <div className="detail-mode-switch" aria-label="右侧面板切换">
-                <button
-                  type="button"
-                  className={detailPaneMode === "catalog" ? "active" : ""}
-                  onClick={() => setDetailPaneMode("catalog")}
-                >
-                  <FileText size={14} />
-                  <span>目录</span>
-                </button>
-                <button
-                  type="button"
-                  className={detailPaneMode === "format" ? "active" : ""}
-                  onClick={openDocumentFormatPane}
-                >
-                  <SlidersHorizontal size={14} />
-                  <span>排版</span>
-                </button>
-              </div>
-            ) : null}
-          </div>
+            </div>
 
-          {workspaceEditorMode === "word" && detailPaneMode === "format" ? (
-            <div id="document-format-panel-slot" className="document-format-panel-slot" />
-          ) : activeCourse && mindMapOutline.length > 0 ? (
-            <nav className="catalog-panel" aria-label="导图目录">
-              <MindMapCatalog
-                items={mindMapOutline}
-                selectedNodeId={selectedMindMapNode.id}
-                resetKey={activeCourseId ?? ""}
-                collapseRequest={catalogCollapseRequest}
-                onNodeSelect={selectCatalogNode}
-                onNodeCopyDocumentPath={copyCatalogNodeDocumentPath}
-                onNodeDelete={deleteCatalogNode}
-                onNodeToggleCatalogBoundary={toggleCatalogBoundary}
+            <div className="editor-mount">
+              <MindMapWorkspace
+                courseId={activeCourse?.id ?? null}
+                courseName={activeCourse?.name ?? "New mind map"}
+                editorMode={workspaceEditorMode}
+                externalChangeRevision={externalContentRevision}
+                modeChangeRequest={modeChangeRequest}
+                nodeSelectionRequest={nodeSelectionRequest}
+                nodeDeletionRequest={nodeDeletionRequest}
+                catalogBoundaryRequest={catalogBoundaryRequest}
+                onEditorModeChange={handleWorkspaceEditorModeChanged}
+                onOutlineChanged={setMindMapOutline}
+                onMindMapIdChanged={setActiveMindMapId}
+                onNodeSelectedChanged={setSelectedMindMapNode}
+                isCatalogPaneCollapsed={isCatalogPaneCollapsed}
+                documentDetailPaneMode={detailPaneMode}
+                onOpenDocumentFormatPane={openDocumentFormatPane}
+                onCloseDocumentFormatPane={closeDocumentFormatPane}
               />
-            </nav>
-          ) : (
-            <div className="detail-empty-state">
-              <strong>{activeCourse ? "暂无目录" : "未选择课程"}</strong>
             </div>
-          )}
-        </aside>
-      </main>
+          </section>
+
+          <aside className="detail-pane" aria-label={workspaceEditorMode === "word" && detailPaneMode === "format" ? "排版" : "目录"}>
+            <div className="detail-heading">
+              <div>
+                <h2>{workspaceEditorMode === "word" && detailPaneMode === "format" ? "排版" : "目录"}</h2>
+              </div>
+              {!(workspaceEditorMode === "word" && detailPaneMode === "format") && mindMapOutline.length > 0 ? (
+                <div className="catalog-tree-toolbar" aria-label="目录视图">
+                  <button
+                    type="button"
+                    title="展开全部；右键只展开父级"
+                    onClick={() => requestCatalogTree("expand-all")}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      requestCatalogTree("expand-branches");
+                    }}
+                  >
+                    <ChevronsDown size={14} />
+                    <span>展开</span>
+                  </button>
+                  <button type="button" onClick={() => requestCatalogTree("collapse-all")}>
+                    <ChevronsRight size={14} />
+                    <span>收叠</span>
+                  </button>
+                </div>
+              ) : null}
+              {workspaceEditorMode === "word" ? (
+                <div className="detail-mode-switch" aria-label="右侧面板切换">
+                  <button
+                    type="button"
+                    className={detailPaneMode === "catalog" ? "active" : ""}
+                    onClick={() => setDetailPaneMode("catalog")}
+                  >
+                    <FileText size={14} />
+                    <span>目录</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={detailPaneMode === "format" ? "active" : ""}
+                    onClick={openDocumentFormatPane}
+                  >
+                    <SlidersHorizontal size={14} />
+                    <span>排版</span>
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
+            {workspaceEditorMode === "word" && detailPaneMode === "format" ? (
+              <div id="document-format-panel-slot" className="document-format-panel-slot" />
+            ) : activeCourse && mindMapOutline.length > 0 ? (
+              <nav className="catalog-panel" aria-label="导图目录">
+                <MindMapCatalog
+                  items={mindMapOutline}
+                  selectedNodeId={selectedMindMapNode.id}
+                  resetKey={activeCourseId ?? ""}
+                  collapseRequest={catalogCollapseRequest}
+                  onNodeSelect={selectCatalogNode}
+                  onNodeCopyDocumentPath={copyCatalogNodeDocumentPath}
+                  onNodeDelete={deleteCatalogNode}
+                  onNodeToggleCatalogBoundary={toggleCatalogBoundary}
+                />
+              </nav>
+            ) : (
+              <div className="detail-empty-state">
+                <strong>{activeCourse ? "暂无目录" : "未选择课程"}</strong>
+              </div>
+            )}
+          </aside>
+        </main>
       ) : activeSection === "assistant" ? (
         <AiAssistantPanel
           storageKey="workspace-assistant"

@@ -139,6 +139,11 @@ contextBridge.exposeInMainWorld("aistudyVocabularyCapture", {
   }
 });
 
+contextBridge.exposeInMainWorld("aistudyDatabase", {
+  getConfig: () => invokeApp("database:get-config"),
+  saveConfig: (config: unknown) => invokeApp("database:save-config", config)
+});
+
 contextBridge.exposeInMainWorld("aistudyInformationCollection", {
   collectBilibili: (input: unknown) => invokeApp("information-collection:bilibili-collect", input),
   processBilibili: (input: unknown) => invokeApp("information-collection:bilibili-process", input),

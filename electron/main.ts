@@ -9623,6 +9623,16 @@ ipcMain.handle("app:before-close-complete", (_event, token: unknown) => {
   return true;
 });
 
+ipcMain.handle("database:get-config", async () => {
+  return await readMysqlConfigFile(getAistudyDataPath("config", "mysql.config.json"));
+});
+
+ipcMain.handle("database:save-config", async (_event, config) => {
+  const targetPath = getAistudyDataPath("config", "mysql.config.json");
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, JSON.stringify(config, null, 2), "utf8");
+});
+
 ipcMain.handle("clipboard:write-text", withUserFacingError("clipboard:write-text", "复制没有完成，请稍后再试。", (_event, text) => {
   if (typeof text !== "string" || !text.trim()) {
     throw createAppError("APP_INVALID_ARGUMENT", "Clipboard text must be a non-empty string.");
