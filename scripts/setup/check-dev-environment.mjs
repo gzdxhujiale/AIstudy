@@ -73,10 +73,15 @@ function supportsCurrentVite(nodeVersion) {
 
 function readPackageLockVersion(packageName) {
   try {
-    const lock = JSON.parse(fs.readFileSync(path.join(projectRoot, "package-lock.json"), "utf8"));
-    return lock.packages?.[`node_modules/${packageName}`]?.version ?? "";
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, "node_modules", packageName, "package.json"), "utf8"));
+    return pkg.version ?? "";
   } catch {
-    return "";
+    try {
+      const lock = JSON.parse(fs.readFileSync(path.join(projectRoot, "package-lock.json"), "utf8"));
+      return lock.packages?.[`node_modules/${packageName}`]?.version ?? "";
+    } catch {
+      return "";
+    }
   }
 }
 
@@ -111,12 +116,13 @@ checks.push(item(
   npmVersion ? "无需处理。" : "请安装 Node.js 自带的 npm。"
 ));
 
+const hasLockfile = exists("package-lock.json") || exists("pnpm-lock.yaml");
 checks.push(item(
   "lockfile",
   "依赖锁定文件",
-  exists("package-lock.json") ? "ok" : "error",
-  exists("package-lock.json") ? "已找到 package-lock.json，依赖版本可复现。" : "缺少 package-lock.json，无法稳定复现依赖版本。",
-  exists("package-lock.json") ? "无需处理。" : "请从仓库重新拉取完整项目。"
+  hasLockfile ? "ok" : "error",
+  hasLockfile ? "已找到依赖锁定文件，依赖版本可复现。" : "缺少 package-lock.json 或 pnpm-lock.yaml，无法稳定复现依赖版本。",
+  hasLockfile ? "无需处理。" : "请从仓库重新拉取完整项目。"
 ));
 
 const nodeModulesReady = exists("node_modules");

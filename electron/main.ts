@@ -309,6 +309,8 @@ type MysqlConfig = {
   port: number;
   user: string;
   password: string;
+  ssl: boolean;
+  skipSchemaCreation: boolean;
   explicitlyConfigured: boolean;
   database: string;
   courseTable: string;
@@ -1302,7 +1304,7 @@ function sendChromeCdpCommand(wsUrl: string, method: string, params: Record<stri
       socket.send(JSON.stringify({ id: commandId, method, params }));
     });
     socket.on("error", () => finish(null));
-    socket.on("message", (data) => {
+    socket.on("message", (data: any) => {
       try {
         const message = JSON.parse(cdpStringifyData(data)) as { id?: number; result?: Record<string, unknown> };
         if (message.id === commandId) {
@@ -4207,6 +4209,8 @@ async function readMysqlConfig(): Promise<MysqlConfig> {
     password: typeof readPublicMysqlEnv("PASSWORD") === "string"
       ? readPublicMysqlEnv("PASSWORD") ?? ""
         : getStringSetting(readSetting(mergedConfig, "password"), ""),
+    ssl: mergedConfig.ssl === true || String(readPublicMysqlEnv("SSL")).toLowerCase() === "true",
+    skipSchemaCreation: mergedConfig.skipSchemaCreation === true || String(readPublicMysqlEnv("SKIP_SCHEMA_CREATION")).toLowerCase() === "true",
     explicitlyConfigured,
     database: PUBLIC_MYSQL_DATABASE,
     courseTable: PUBLIC_MYSQL_TABLES.courses,
@@ -4258,7 +4262,8 @@ async function ensureDatabase(config: MysqlConfig) {
     host: config.host,
     port: config.port,
     user: config.user,
-    password: config.password
+    password: config.password,
+    ...(config.ssl ? { ssl: { minVersion: "TLSv1.2" as const } } : {})
   });
 
   try {
@@ -4789,7 +4794,8 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
     database: config.database,
     waitForConnections: true,
     connectionLimit: 10,
-    charset: "utf8mb4"
+    charset: "utf8mb4",
+    ...(config.ssl ? { ssl: { minVersion: "TLSv1.2" as const } } : {})
   });
   const courseTable = escapeMysqlIdentifier(config.courseTable, "MySQL course table");
   const courseSectionTable = escapeMysqlIdentifier(config.courseSectionTable, "MySQL course section table");
@@ -4813,17 +4819,25 @@ async function createMysqlRuntime(): Promise<MysqlRuntime> {
   const textbookAssetTable = escapeMysqlIdentifier(config.textbookAssetTable, "MySQL textbook asset table");
   const textbookNoteTable = escapeMysqlIdentifier(config.textbookNoteTable, "MySQL textbook note table");
   const textbookAnnotationTable = escapeMysqlIdentifier(config.textbookAnnotationTable, "MySQL textbook annotation table");
-  await ensureCourseTable(pool, courseTable);
-  await migrateCourseTable(pool, courseTable);
-  await ensureCourseSectionTable(pool, courseSectionTable);
-  await migrateCourseSectionTable(pool, courseSectionTable);
-  await ensureMindMapTables(pool, mindMapTable, mindMapSnapshotTable, mindMapNodeTable);
-  await ensureKnowledgeDocumentTables(pool, knowledgeDocumentTable, knowledgeDocumentSnapshotTable);
-  await ensureKnowledgeAssetTables(pool, assetTable, knowledgeAssetLinkTable);
-  await ensureChromePortStateTable(pool, chromePortStateTable);
-  await ensureErrorLogTable(pool, errorLogTable);
-  await ensureExamTables(pool, examQuestionTable, examPaperTable, examPaperSectionTable, examPaperQuestionTable, examAttemptTable);
-  await ensureTextbookTables(pool, textbookAssetTable, textbookNoteTable, textbookAnnotationTable);
+  if (!config.skipSchemaCreation) {
+    await Promise.all([
+      (async () => {
+        await ensureCourseTable(pool, courseTable);
+        await migrateCourseTable(pool, courseTable);
+      })(),
+      (async () => {
+        await ensureCourseSectionTable(pool, courseSectionTable);
+        await migrateCourseSectionTable(pool, courseSectionTable);
+      })(),
+      ensureMindMapTables(pool, mindMapTable, mindMapSnapshotTable, mindMapNodeTable),
+      ensureKnowledgeDocumentTables(pool, knowledgeDocumentTable, knowledgeDocumentSnapshotTable),
+      ensureKnowledgeAssetTables(pool, assetTable, knowledgeAssetLinkTable),
+      ensureChromePortStateTable(pool, chromePortStateTable),
+      ensureErrorLogTable(pool, errorLogTable),
+      ensureExamTables(pool, examQuestionTable, examPaperTable, examPaperSectionTable, examPaperQuestionTable, examAttemptTable),
+      ensureTextbookTables(pool, textbookAssetTable, textbookNoteTable, textbookAnnotationTable)
+    ]);
+  }
 
   mysqlRuntime = {
     pool,

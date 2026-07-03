@@ -13,6 +13,11 @@ export default defineConfig({
       "node:stream": nodeStreamShim
     }
   },
+  server: {
+    watch: {
+      ignored: ["**/.runtime/**", "**/.tmp/**", "**/dist-electron/**", "**/release/**"]
+    }
+  },
   build: {
     outDir: "dist",
     emptyOutDir: true,
