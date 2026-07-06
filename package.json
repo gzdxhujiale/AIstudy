@@ -120,5 +120,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "AIstudy"
     }
-  }
+  },
+  "browserslist": [
+    "Chrome >= 122"
+  ]
 }

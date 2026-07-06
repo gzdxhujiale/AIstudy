@@ -1,0 +1,4 @@
+{
+  "css.lint.unsupportedBrowserFeatures": "ignore",
+  "css.lint.unknownProperties": "ignore"
+}

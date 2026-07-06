@@ -329,39 +329,39 @@ function DatabaseSettingsPanel() {
       </section>
 
       <form onSubmit={handleSave} className="shortcut-settings-list">
-        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+        <article className="shortcut-settings-row db-connection-row">
           <div className="shortcut-settings-main">
             <strong>Host</strong>
           </div>
-          <input type="text" name="host" value={config.host || ""} onChange={handleChange} style={{ width: 240, textAlign: 'left', padding: '0 8px' }} />
+          <input type="text" name="host" title="Database Host" placeholder="Database Host" value={config.host || ""} onChange={handleChange} className="db-connection-input host" />
         </article>
-        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+        <article className="shortcut-settings-row db-connection-row">
           <div className="shortcut-settings-main">
             <strong>Port</strong>
           </div>
-          <input type="number" name="port" value={config.port || 3306} onChange={handleChange} style={{ width: 100, textAlign: 'left', padding: '0 8px' }} />
+          <input type="number" name="port" title="Database Port" placeholder="Database Port" value={config.port || 3306} onChange={handleChange} className="db-connection-input port" />
         </article>
-        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+        <article className="shortcut-settings-row db-connection-row">
           <div className="shortcut-settings-main">
             <strong>User</strong>
           </div>
-          <input type="text" name="user" value={config.user || ""} onChange={handleChange} style={{ width: 200, textAlign: 'left', padding: '0 8px' }} />
+          <input type="text" name="user" title="Database User" placeholder="Database User" value={config.user || ""} onChange={handleChange} className="db-connection-input user" />
         </article>
-        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+        <article className="shortcut-settings-row db-connection-row">
           <div className="shortcut-settings-main">
             <strong>Password</strong>
           </div>
-          <input type="password" name="password" value={config.password || ""} onChange={handleChange} style={{ width: 200, textAlign: 'left', padding: '0 8px' }} />
+          <input type="password" name="password" title="Database Password" placeholder="Database Password" value={config.password || ""} onChange={handleChange} className="db-connection-input password" />
         </article>
-        <article className="shortcut-settings-row" style={{ gridTemplateColumns: "350px auto 1fr" }}>
+        <article className="shortcut-settings-row db-connection-row">
           <div className="shortcut-settings-main">
-            <label htmlFor="skipSchemaCreation" style={{ fontWeight: 560, cursor: 'pointer' }}>跳过建表检查 (加速连接)</label>
+            <label htmlFor="skipSchemaCreation" className="db-connection-label">跳过建表检查 (加速连接)</label>
           </div>
-          <input type="checkbox" id="skipSchemaCreation" name="skipSchemaCreation" checked={config.skipSchemaCreation || false} onChange={handleChange} style={{ cursor: 'pointer', justifySelf: 'start', width: 'auto', height: '16px', margin: '0' }} />
+          <input type="checkbox" id="skipSchemaCreation" name="skipSchemaCreation" title="Skip Schema Creation" placeholder="Skip Schema Creation" checked={config.skipSchemaCreation || false} onChange={handleChange} className="db-connection-checkbox" />
         </article>
 
         {message && (
-          <p className={message.includes("失败") ? "status-message error" : "update-status"} style={{ margin: "16px 0 0" }}>
+          <p className={message.includes("失败") ? "status-message error db-connection-status" : "update-status db-connection-status"}>
             {message}
           </p>
         )}
@@ -902,7 +902,7 @@ function SettingsDialog({ onClose }: { onClose: () => void }) {
                       <strong>{progressPercent}%</strong>
                     </div>
                     <div className="update-progress-track" aria-hidden="true">
-                      <span style={{ width: `${progressPercent}%` }} />
+                      <span ref={el => { if (el) el.style.setProperty("--progress-width", `${progressPercent}%`); }} />
                     </div>
                     <div className="update-progress-meta">
                       <span>{visibleDownloadProgress.fileName}</span>
