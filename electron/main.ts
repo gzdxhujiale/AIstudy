@@ -79,7 +79,7 @@ function resolveAistudyUserDataRoot() {
     return path.join(fDriveRoot, PUBLIC_CLEAN_DATA_ROOT_NAME, "user-data");
   }
 
-  return path.join(app.getAppPath(), ".runtime", "user-data");
+  return app.getPath("userData");
 }
 
 const aistudyUserDataRoot = resolveAistudyUserDataRoot();

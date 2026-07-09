@@ -75,11 +75,10 @@ async function validateMindMapImports() {
 
 async function validatePackagePolicy() {
   const packageJson = await readJson("package.json");
-  const lockJson = await readJson("package-lock.json");
+  const lockText = await fs.readFile(path.join(repoRoot, "pnpm-lock.yaml"), "utf8");
   const dependencies = packageJson.dependencies ?? {};
   const devDependencies = packageJson.devDependencies ?? {};
   const overrides = packageJson.overrides ?? {};
-  const lockPackages = lockJson.packages ?? {};
 
   if (devDependencies.quill !== "file:./scripts/npm-stubs/quill") {
     fail("quill 必须指向本地安全 stub：devDependencies.quill = file:./scripts/npm-stubs/quill");
@@ -94,22 +93,13 @@ async function validatePackagePolicy() {
     fail("quill 不能作为生产依赖安装。");
   }
 
-  const quillNode = lockPackages["node_modules/quill"];
-  if (!quillNode || quillNode.link !== true || quillNode.resolved !== "scripts/npm-stubs/quill") {
-    fail("package-lock 中的 node_modules/quill 必须是 scripts/npm-stubs/quill 的 link。");
-  }
-  const quillStubNode = lockPackages["scripts/npm-stubs/quill"];
-  if (!quillStubNode || quillStubNode.version !== "2.0.4") {
-    fail("package-lock 必须登记本地 quill stub 版本 2.0.4。");
-  }
-  if (Object.hasOwn(lockPackages, "node_modules/simple-mind-map/node_modules/quill")) {
-    fail("simple-mind-map 不能安装独立 Quill 副本。");
+  if (!lockText.includes("file:scripts/npm-stubs/quill")) {
+    fail("pnpm-lock 必须包含 scripts/npm-stubs/quill 的 link。");
   }
 
-  const lockText = JSON.stringify(lockJson);
   for (const forbiddenPackage of ["quill-delta", "parchment", "lodash-es", "fast-diff"]) {
-    if (lockText.includes(`node_modules/${forbiddenPackage}`) || lockText.includes(`node_modules\\\\${forbiddenPackage}`)) {
-      fail(`package-lock 不能包含真实 Quill 依赖：${forbiddenPackage}`);
+    if (lockText.includes(`${forbiddenPackage}@`) || lockText.includes(`${forbiddenPackage}:`)) {
+      fail(`pnpm-lock 不能包含真实 Quill 依赖：${forbiddenPackage}`);
     }
   }
 }

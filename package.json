@@ -27,10 +27,10 @@
     "qa:mindmap-catalog": "node scripts/qa/validate-mindmap-catalog-boundary.mjs",
     "qa:math-clipboard": "node scripts/qa/validate-math-clipboard.mjs",
     "qa:document-clipboard": "node scripts/qa/validate-document-clipboard.mjs",
-    "qa:error-codes": "npm run build && node scripts/qa/validate-error-codes.mjs",
-    "qa:textbook": "npm run build && node scripts/qa/validate-textbook-regressions.mjs",
-    "pack": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist",
-    "dist": "npm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
+    "qa:error-codes": "pnpm run build && node scripts/qa/validate-error-codes.mjs",
+    "qa:textbook": "pnpm run build && node scripts/qa/validate-textbook-regressions.mjs",
+    "pack": "pnpm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist",
+    "dist": "pnpm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
     "dist:oneclick": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/close-and-dist.ps1",
     "shortcuts:refresh": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package/refresh-shortcuts.ps1",
     "setup:doctor": "node scripts/setup/check-dev-environment.mjs",
@@ -67,14 +67,22 @@
     "quill": "file:./scripts/npm-stubs/quill",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "simple-mind-map": "^0.14.0-fix.2",
+    "rolldown": "^1.1.4",
+    "simple-mind-map": "0.14.0-fix.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.16",
     "wait-on": "^9.0.3"
   },
+  "pnpm.overrides": {
+    "undici": "6.27.0",
+    "uuid": "11.1.1",
+    "quill": "file:./scripts/npm-stubs/quill",
+    "simple-mind-map>quill": "file:./scripts/npm-stubs/quill"
+  },
   "overrides": {
     "undici": "6.27.0",
-    "uuid": "11.1.1"
+    "uuid": "11.1.1",
+    "quill": "link:./scripts/npm-stubs/quill"
   },
   "build": {
     "appId": "com.snowlove0303.aistudy",

@@ -1,3 +1,5 @@
 allowBuilds:
   electron: true
   electron-winstaller: true
+patchedDependencies:
+  simple-mind-map@0.14.0-fix.3: patches/simple-mind-map@0.14.0-fix.3.patch
